@@ -2,6 +2,12 @@ import React, { useState } from 'react';
 import CryptoService from '../services/cryptoService';
 import apiService from '../services/apiService';
 
+// Komponent: Podpisywanie pliku PDF
+// Przepływ:
+// 1) Backend przygotowuje plik i zwraca ścieżkę tymczasową (+hash pliku)
+// 2) Front liczy hash lokalnie i podpisuje go kluczem prywatnym (Web Crypto)
+// 3) Backend zapisuje podpis i metadane, zwraca PDF (taki sam plik) do pobrania
+
 const PdfUploader: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState({
@@ -12,6 +18,7 @@ const PdfUploader: React.FC = () => {
   });
   const [loading, setLoading] = useState(false);
 
+  // Waliduje typ pliku i zapamiętuje wybrany PDF
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile && selectedFile.type === 'application/pdf') {
@@ -21,6 +28,7 @@ const PdfUploader: React.FC = () => {
     }
   };
 
+  // Główna akcja podpisywania dokumentu
   const handleSign = async () => {
     if (!file) {
       alert('❌ Wybierz plik PDF!');
@@ -41,10 +49,12 @@ const PdfUploader: React.FC = () => {
     setLoading(true);
 
     try {
+      // 1) Przygotuj plik do podpisu w backendzie (zapisz tymczasowo)
       const formData = new FormData();
       formData.append('file', file);
       const prepareResponse = await apiService.prepareSignature(formData);
 
+      // 2) Oblicz hash pliku i podpisz go kluczem prywatnym
       const fileHash = await CryptoService.calculateFileHash(file);
       const privateKeyObj = await window.crypto.subtle.importKey(
         'jwk',
@@ -55,6 +65,7 @@ const PdfUploader: React.FC = () => {
       );
       const signature = await CryptoService.signHash(fileHash, privateKeyObj);
 
+      // 3) Doślij podpis, klucz publiczny i metadane do backendu
       const embedData = new FormData();
       embedData.append('temp_file_path', prepareResponse.temp_file_path);
       embedData.append('signature', CryptoService.arrayBufferToBase64(signature));
@@ -66,6 +77,7 @@ const PdfUploader: React.FC = () => {
 
       const signedBlob = await apiService.embedSignature(embedData);
 
+      // 4) Pobierz plik (nazwa_zmieniona_na _signed.pdf)
       const url = URL.createObjectURL(signedBlob);
       const a = document.createElement('a');
       a.href = url;

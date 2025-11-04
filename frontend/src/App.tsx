@@ -40,6 +40,10 @@ function App() {
         {tab === 'sign' && <PdfUploader />}
         {tab === 'verify' && <SignatureVerifier />}
       </div>
+
+      <footer className="app-footer mt-3 text-center">
+        <small className="text-muted">© 2025 Projekt PAI • Grupa 5</small>
+      </footer>
     </div>
   );
 }

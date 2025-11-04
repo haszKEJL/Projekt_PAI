@@ -19,7 +19,12 @@ async def signature_root():
 
 @router.post("/prepare-signature")
 async def prepare_signature(file: UploadFile = File(...)):
-    """Przygotowuje plik do podpisania - zwraca hash"""
+    """
+    Przygotowuje plik do podpisania (zapis tymczasowy) i zwraca jego hash.
+
+    Zwraca m.in.: temp_file_path (na dysku serwera), file_hash (Base64) –
+    to ten hash podpisuje front przy użyciu klucza prywatnego.
+    """
     try:
         pdf_content = await file.read()
         file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
@@ -30,6 +35,7 @@ async def prepare_signature(file: UploadFile = File(...)):
             f"temp_{datetime.now().timestamp()}_{file.filename}"
         )
         
+        # Zapisz plik tymczasowo – finalny PDF nie jest modyfikowany przez backend
         with open(temp_file_path, "wb") as f:
             f.write(pdf_content)
         
@@ -54,7 +60,12 @@ async def embed_signature(
     metadata: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """Zapisuje podpis w bazie danych"""
+    """
+    Zapisuje podpis i metadane w bazie (bez modyfikacji samego PDF-a).
+
+    Zwraca strumień pliku PDF (ten sam, który został przygotowany), aby
+    użytkownik mógł go pobrać – nazwa pliku ma sufiks _signed.pdf.
+    """
     try:
         if not os.path.exists(temp_file_path):
             raise HTTPException(404, "Plik tymczasowy nie znaleziony")
@@ -65,7 +76,7 @@ async def embed_signature(
         file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
         metadata_dict = json.loads(metadata)
         
-        # Sprawdź czy już istnieje
+        # Sprawdź czy rekord już istnieje (po hash-u pliku)
         existing = db.query(Signature).filter(
             Signature.file_hash == file_hash_b64
         ).first()
@@ -73,7 +84,7 @@ async def embed_signature(
         if existing:
             raise HTTPException(409, "Dokument już podpisany")
         
-        # Zapisz w bazie
+        # Zapisz podpis i metadane w bazie
         new_signature = Signature(
             file_hash=file_hash_b64,
             signature_data=signature,
@@ -133,7 +144,7 @@ async def verify_signature_manual(
         else:
             raise HTTPException(400, "Brak pola 'kty' lub 'publicKey'")
         
-        # Znajdź w bazie
+        # Znajdź podpis w bazie po hash-u pliku
         signature_record = db.query(Signature).filter(
             Signature.file_hash == file_hash_b64
         ).first()
@@ -145,7 +156,7 @@ async def verify_signature_manual(
                 "message": "❌ Dokument nie został podpisany"
             }
         
-        # Weryfikuj
+        # Weryfikuj podpis RSA-PSS używając dostarczonego klucza publicznego
         is_valid, message = CryptoVerificationService.verify_signature(
             signature_record.signature_data,
             public_key_jwk,
