@@ -8,6 +8,7 @@ from datetime import datetime
 
 from ..database import get_db, Signature
 from ..services.crypto_service import CryptoVerificationService
+from ..services.pdf_service import PdfService
 
 router = APIRouter(prefix="/signature", tags=["signature"])
 
@@ -54,7 +55,7 @@ async def embed_signature(
     metadata: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """Zapisuje podpis w bazie danych"""
+    """Zapisuje podpis w bazie danych i osadza w PDF"""
     try:
         if not os.path.exists(temp_file_path):
             raise HTTPException(404, "Plik tymczasowy nie znaleziony")
@@ -88,13 +89,37 @@ async def embed_signature(
         db.add(new_signature)
         db.commit()
         
+        # Przygotuj nazwy plików
         original_filename = metadata_dict.get('filename', 'document.pdf')
         signed_filename = original_filename.replace('.pdf', '_signed.pdf')
         
+        # Ścieżka do nowego pliku z osadzonym podpisem
+        temp_dir = tempfile.gettempdir()
+        signed_file_path = os.path.join(
+            temp_dir, 
+            f"signed_{datetime.now().timestamp()}_{signed_filename}"
+        )
+        
+        # Osadź metadane i podpis w PDF
+        success = PdfService.embed_signature_in_pdf(
+            input_pdf_path=temp_file_path,
+            output_pdf_path=signed_file_path,
+            signature_data=signature,
+            metadata=metadata_dict
+        )
+        
+        # Jeśli osadzenie się nie powiodło, zwróć oryginalny
+        if not success:
+            signed_file_path = temp_file_path
+        
+        # Zwróć podpisany plik
         return FileResponse(
-            temp_file_path,
+            signed_file_path,
             media_type="application/pdf",
-            filename=signed_filename
+            filename=signed_filename,
+            headers={
+                "Content-Disposition": f"attachment; filename={signed_filename}"
+            }
         )
         
     except HTTPException:
