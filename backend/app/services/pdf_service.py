@@ -1,4 +1,12 @@
 from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2.generic import (
+    DictionaryObject, 
+    ArrayObject, 
+    NumberObject, 
+    NameObject, 
+    TextStringObject,
+    IndirectObject
+)
 from datetime import datetime
 import os
 
@@ -12,15 +20,18 @@ class PdfService:
         signature_data: str,
         metadata: dict
     ) -> bool:
-        """Osadza podpis i metadane w PDF"""
+        """
+        Osadza podpis i metadane w PDF (PyPDF2 3.x compatible)
+        """
         try:
             reader = PdfReader(input_pdf_path)
             writer = PdfWriter()
             
+            # Kopiuj wszystkie strony
             for page in reader.pages:
                 writer.add_page(page)
             
-            # Dodaj metadane
+            # ✅ METADANE PDF
             writer.add_metadata({
                 '/Author': metadata.get('name', 'Unknown'),
                 '/Subject': f"Digitally Signed: {metadata.get('reason', 'Document Approval')}",
@@ -34,39 +45,61 @@ class PdfService:
                 '/SignatureData': signature_data[:100] + '...',
             })
             
-            # Dodaj sticky note na pierwszej stronie
+            # ✅ ADNOTACJA (Poprawiona składnia - wszystkie klucze jako NameObject)
             if len(writer.pages) > 0:
-                first_page = writer.pages[0]
-                
-                annotation_text = (
-                    f"🔒 DIGITALLY SIGNED\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"Signer: {metadata.get('name', 'Unknown')}\n"
-                    f"Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
-                    f"Location: {metadata.get('location', 'N/A')}\n"
-                    f"Reason: {metadata.get('reason', 'N/A')}\n"
-                    f"Contact: {metadata.get('contact', 'N/A')}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"Algorithm: RSA-PSS (2048-bit) + SHA-256\n"
-                    f"Signature (partial): {signature_data[:60]}...\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"This document has been digitally signed.\n"
-                    f"Do not modify - signature will be invalid!"
-                )
-                
-                annotation = {
-                    '/Type': '/Annot',
-                    '/Subtype': '/Text',
-                    '/Rect': [50, 750, 100, 800],
-                    '/Contents': annotation_text,
-                    '/Name': '/Comment',
-                    '/T': 'Digital Signature',
-                    '/C': [1, 1, 0],
-                }
-                
-                first_page.add_annotation(annotation)
+                try:
+                    annotation_text = (
+                        f"🔒 DIGITALLY SIGNED\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Signer: {metadata.get('name', 'Unknown')}\n"
+                        f"Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+                        f"Location: {metadata.get('location', 'N/A')}\n"
+                        f"Reason: {metadata.get('reason', 'N/A')}\n"
+                        f"Contact: {metadata.get('contact', 'N/A')}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Algorithm: RSA-PSS (2048-bit) + SHA-256\n"
+                        f"Signature: {signature_data[:60]}...\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"This document has been digitally signed.\n"
+                        f"Do not modify - signature will be invalid!"
+                    )
+                    
+                    # Utwórz adnotację - WSZYSTKIE klucze jako NameObject!
+                    annotation = DictionaryObject()
+                    annotation[NameObject('/Type')] = NameObject('/Annot')
+                    annotation[NameObject('/Subtype')] = NameObject('/Text')
+                    annotation[NameObject('/Rect')] = ArrayObject([
+                        NumberObject(50), 
+                        NumberObject(750),
+                        NumberObject(100), 
+                        NumberObject(800)
+                    ])
+                    annotation[NameObject('/Contents')] = TextStringObject(annotation_text)
+                    annotation[NameObject('/Name')] = NameObject('/Comment')
+                    annotation[NameObject('/T')] = TextStringObject('Digital Signature')
+                    annotation[NameObject('/C')] = ArrayObject([
+                        NumberObject(1), 
+                        NumberObject(1), 
+                        NumberObject(0)
+                    ])
+                    
+                    # Dodaj do pierwszej strony
+                    first_page = writer.pages[0]
+                    
+                    # Inicjalizuj /Annots jeśli nie istnieje
+                    if NameObject('/Annots') not in first_page:
+                        first_page[NameObject('/Annots')] = ArrayObject()
+                    
+                    # Dodaj adnotację
+                    first_page[NameObject('/Annots')].append(writer._add_object(annotation))
+                    
+                    print("✅ Annotation added successfully")
+                    
+                except Exception as annot_error:
+                    print(f"⚠️ Warning: Could not add annotation: {annot_error}")
+                    # Kontynuuj bez adnotacji - metadane są najważniejsze
             
-            # Zapisz
+            # ✅ ZAPISZ
             with open(output_pdf_path, 'wb') as output_file:
                 writer.write(output_file)
             
