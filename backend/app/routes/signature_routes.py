@@ -20,12 +20,7 @@ async def signature_root():
 
 @router.post("/prepare-signature")
 async def prepare_signature(file: UploadFile = File(...)):
-    """
-    Przygotowuje plik do podpisania (zapis tymczasowy) i zwraca jego hash.
-
-    Zwraca m.in.: temp_file_path (na dysku serwera), file_hash (Base64) –
-    to ten hash podpisuje front przy użyciu klucza prywatnego.
-    """
+    """Przygotowuje plik do podpisania - zwraca hash"""
     try:
         pdf_content = await file.read()
         file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
@@ -36,7 +31,6 @@ async def prepare_signature(file: UploadFile = File(...)):
             f"temp_{datetime.now().timestamp()}_{file.filename}"
         )
         
-        # Zapisz plik tymczasowo – finalny PDF nie jest modyfikowany przez backend
         with open(temp_file_path, "wb") as f:
             f.write(pdf_content)
         
@@ -61,16 +55,7 @@ async def embed_signature(
     metadata: str = Form(...),
     db: Session = Depends(get_db)
 ):
-<<<<<<< HEAD
-    """Zapisuje podpis w bazie danych i osadza w PDF"""
-=======
-    """
-    Zapisuje podpis i metadane w bazie (bez modyfikacji samego PDF-a).
-
-    Zwraca strumień pliku PDF (ten sam, który został przygotowany), aby
-    użytkownik mógł go pobrać – nazwa pliku ma sufiks _signed.pdf.
-    """
->>>>>>> f0e87180019e96d81c71b73f7b8ae761a705d7ba
+    """Zapisuje podpis w bazie danych i osadza metadane w PDF"""
     try:
         if not os.path.exists(temp_file_path):
             raise HTTPException(404, "Plik tymczasowy nie znaleziony")
@@ -81,7 +66,6 @@ async def embed_signature(
         file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
         metadata_dict = json.loads(metadata)
         
-        # Sprawdź czy rekord już istnieje (po hash-u pliku)
         existing = db.query(Signature).filter(
             Signature.file_hash == file_hash_b64
         ).first()
@@ -89,7 +73,6 @@ async def embed_signature(
         if existing:
             raise HTTPException(409, "Dokument już podpisany")
         
-        # Zapisz podpis i metadane w bazie
         new_signature = Signature(
             file_hash=file_hash_b64,
             signature_data=signature,
@@ -104,18 +87,15 @@ async def embed_signature(
         db.add(new_signature)
         db.commit()
         
-        # Przygotuj nazwy plików
         original_filename = metadata_dict.get('filename', 'document.pdf')
         signed_filename = original_filename.replace('.pdf', '_signed.pdf')
         
-        # Ścieżka do nowego pliku z osadzonym podpisem
         temp_dir = tempfile.gettempdir()
         signed_file_path = os.path.join(
             temp_dir, 
             f"signed_{datetime.now().timestamp()}_{signed_filename}"
         )
         
-        # Osadź metadane i podpis w PDF
         success = PdfService.embed_signature_in_pdf(
             input_pdf_path=temp_file_path,
             output_pdf_path=signed_file_path,
@@ -123,11 +103,9 @@ async def embed_signature(
             metadata=metadata_dict
         )
         
-        # Jeśli osadzenie się nie powiodło, zwróć oryginalny
         if not success:
             signed_file_path = temp_file_path
         
-        # Zwróć podpisany plik
         return FileResponse(
             signed_file_path,
             media_type="application/pdf",
@@ -149,15 +127,11 @@ async def verify_signature_manual(
     public_key_file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Weryfikacja z ZEWNĘTRZNYM kluczem publicznym
-    """
+    """Weryfikacja z ZEWNĘTRZNYM kluczem publicznym"""
     try:
-        # Odczytaj PDF
         pdf_content = await pdf_file.read()
         file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
         
-        # Odczytaj klucz publiczny
         public_key_content = await public_key_file.read()
         
         try:
@@ -165,7 +139,6 @@ async def verify_signature_manual(
         except json.JSONDecodeError:
             raise HTTPException(400, "Nieprawidłowy format JSON klucza")
         
-        # Obsługa formatów
         if 'publicKey' in public_key_json:
             public_key_jwk = json.dumps(public_key_json['publicKey'])
         elif 'kty' in public_key_json:
@@ -173,7 +146,6 @@ async def verify_signature_manual(
         else:
             raise HTTPException(400, "Brak pola 'kty' lub 'publicKey'")
         
-        # Znajdź podpis w bazie po hash-u pliku
         signature_record = db.query(Signature).filter(
             Signature.file_hash == file_hash_b64
         ).first()
@@ -185,7 +157,6 @@ async def verify_signature_manual(
                 "message": "❌ Dokument nie został podpisany"
             }
         
-        # Weryfikuj podpis RSA-PSS używając dostarczonego klucza publicznego
         is_valid, message = CryptoVerificationService.verify_signature(
             signature_record.signature_data,
             public_key_jwk,
