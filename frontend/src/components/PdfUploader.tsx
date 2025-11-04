@@ -2,12 +2,6 @@ import React, { useState } from 'react';
 import CryptoService from '../services/cryptoService';
 import apiService from '../services/apiService';
 
-// Komponent: Podpisywanie pliku PDF
-// Przepływ:
-// 1) Backend przygotowuje plik i zwraca ścieżkę tymczasową (+hash pliku)
-// 2) Front liczy hash lokalnie i podpisuje go kluczem prywatnym (Web Crypto)
-// 3) Backend zapisuje podpis i metadane, zwraca PDF (taki sam plik) do pobrania
-
 const PdfUploader: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState({
@@ -18,7 +12,6 @@ const PdfUploader: React.FC = () => {
   });
   const [loading, setLoading] = useState(false);
 
-  // Waliduje typ pliku i zapamiętuje wybrany PDF
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile && selectedFile.type === 'application/pdf') {
@@ -28,7 +21,6 @@ const PdfUploader: React.FC = () => {
     }
   };
 
-  // Główna akcja podpisywania dokumentu
   const handleSign = async () => {
     if (!file) {
       alert('❌ Wybierz plik PDF!');
@@ -49,13 +41,21 @@ const PdfUploader: React.FC = () => {
     setLoading(true);
 
     try {
-      // 1) Przygotuj plik do podpisu w backendzie (zapisz tymczasowo)
+      // 1. Przygotuj plik Z METADANAMI
       const formData = new FormData();
       formData.append('file', file);
-      const prepareResponse = await apiService.prepareSignature(formData);
+      formData.append('metadata', JSON.stringify({
+        ...metadata,
+        filename: file.name,
+      }));
 
-      // 2) Oblicz hash pliku i podpisz go kluczem prywatnym
-      const fileHash = await CryptoService.calculateFileHash(file);
+      const prepareResponse = await apiService.prepareSignatureWithMetadata(formData);
+
+      // 2. Konwertuj hash z Base64 do ArrayBuffer
+      const fileHashBase64 = prepareResponse.file_hash;
+      const hashBytes = Uint8Array.from(atob(fileHashBase64), c => c.charCodeAt(0));
+
+      // 3. Podpisz hash
       const privateKeyObj = await window.crypto.subtle.importKey(
         'jwk',
         keys.privateKey,
@@ -63,9 +63,10 @@ const PdfUploader: React.FC = () => {
         false,
         ['sign']
       );
-      const signature = await CryptoService.signHash(fileHash, privateKeyObj);
+      
+      const signature = await CryptoService.signHash(hashBytes.buffer, privateKeyObj);
 
-      // 3) Doślij podpis, klucz publiczny i metadane do backendu
+      // 4. Wyślij podpis
       const embedData = new FormData();
       embedData.append('temp_file_path', prepareResponse.temp_file_path);
       embedData.append('signature', CryptoService.arrayBufferToBase64(signature));
@@ -77,7 +78,7 @@ const PdfUploader: React.FC = () => {
 
       const signedBlob = await apiService.embedSignature(embedData);
 
-      // 4) Pobierz plik (nazwa_zmieniona_na _signed.pdf)
+      // 5. Pobierz
       const url = URL.createObjectURL(signedBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -87,7 +88,6 @@ const PdfUploader: React.FC = () => {
 
       alert('✅ Dokument został pomyślnie podpisany!');
       
-      // Reset
       setFile(null);
       setMetadata({ name: '', location: '', reason: '', contact: '' });
     } catch (error: any) {
@@ -112,13 +112,9 @@ const PdfUploader: React.FC = () => {
 
       <div className="form-group">
         <label className="form-label">📄 Wybierz Dokument PDF</label>
-        <div className={`file-upload-wrapper`}>
+        <div className="file-upload-wrapper">
           <label className={`file-upload-label ${file ? 'has-file' : ''}`}>
-            <input
-              type="file"
-              accept=".pdf"
-              onChange={handleFileChange}
-            />
+            <input type="file" accept=".pdf" onChange={handleFileChange} />
             <span>{file ? `✅ ${file.name}` : '📁 Kliknij aby wybrać plik PDF'}</span>
           </label>
         </div>
@@ -168,11 +164,7 @@ const PdfUploader: React.FC = () => {
         />
       </div>
 
-      <button 
-        onClick={handleSign} 
-        disabled={loading || !file} 
-        className="btn btn--primary"
-      >
+      <button onClick={handleSign} disabled={loading || !file} className="btn btn--primary">
         {loading ? (
           <>
             <span className="spinner"></span>

@@ -18,28 +18,59 @@ async def signature_root():
     return {"message": "Signature API"}
 
 
-@router.post("/prepare-signature")
-async def prepare_signature(file: UploadFile = File(...)):
-    """Przygotowuje plik do podpisania - zwraca hash"""
+@router.post("/prepare-signature-with-metadata")
+async def prepare_signature_with_metadata(
+    file: UploadFile = File(...),
+    metadata: str = Form(...)
+):
+    """
+    Przygotowuje plik Z METADANAMI do podpisania
+    Zwraca hash FINAŁOWEGO pliku (z metadanami)
+    """
     try:
         pdf_content = await file.read()
-        file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
+        metadata_dict = json.loads(metadata)
         
         temp_dir = tempfile.gettempdir()
-        temp_file_path = os.path.join(
+        
+        # Zapisz oryginalny plik
+        original_path = os.path.join(
             temp_dir, 
-            f"temp_{datetime.now().timestamp()}_{file.filename}"
+            f"orig_{datetime.now().timestamp()}_{file.filename}"
+        )
+        with open(original_path, "wb") as f:
+            f.write(pdf_content)
+        
+        # Utwórz plik Z METADANAMI
+        temp_signed_path = os.path.join(
+            temp_dir,
+            f"temp_signed_{datetime.now().timestamp()}_{file.filename}"
         )
         
-        with open(temp_file_path, "wb") as f:
-            f.write(pdf_content)
+        # Dodaj metadane
+        success = PdfService.embed_signature_in_pdf(
+            input_pdf_path=original_path,
+            output_pdf_path=temp_signed_path,
+            signature_data="PENDING",  # Placeholder
+            metadata=metadata_dict
+        )
+        
+        if not success:
+            temp_signed_path = original_path
+        
+        # Oblicz hash FINAŁOWEGO pliku
+        with open(temp_signed_path, 'rb') as f:
+            final_pdf_content = f.read()
+        
+        file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(final_pdf_content)
         
         return {
             "success": True,
             "file_hash": file_hash_b64,
-            "temp_file_path": temp_file_path,
+            "temp_file_path": temp_signed_path,
             "original_filename": file.filename
         }
+        
     except Exception as e:
         raise HTTPException(
             status_code=500, 
@@ -55,17 +86,21 @@ async def embed_signature(
     metadata: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """Zapisuje podpis w bazie danych i osadza metadane w PDF"""
+    """
+    Zapisuje podpis w bazie (plik JUŻ ma metadane!)
+    """
     try:
         if not os.path.exists(temp_file_path):
             raise HTTPException(404, "Plik tymczasowy nie znaleziony")
         
+        # Oblicz hash ISTNIEJĄCEGO pliku
         with open(temp_file_path, 'rb') as f:
             pdf_content = f.read()
         
         file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
         metadata_dict = json.loads(metadata)
         
+        # Sprawdź czy już istnieje
         existing = db.query(Signature).filter(
             Signature.file_hash == file_hash_b64
         ).first()
@@ -73,6 +108,7 @@ async def embed_signature(
         if existing:
             raise HTTPException(409, "Dokument już podpisany")
         
+        # Zapisz w bazie
         new_signature = Signature(
             file_hash=file_hash_b64,
             signature_data=signature,
@@ -87,27 +123,13 @@ async def embed_signature(
         db.add(new_signature)
         db.commit()
         
+        # Nazwij plik
         original_filename = metadata_dict.get('filename', 'document.pdf')
         signed_filename = original_filename.replace('.pdf', '_signed.pdf')
         
-        temp_dir = tempfile.gettempdir()
-        signed_file_path = os.path.join(
-            temp_dir, 
-            f"signed_{datetime.now().timestamp()}_{signed_filename}"
-        )
-        
-        success = PdfService.embed_signature_in_pdf(
-            input_pdf_path=temp_file_path,
-            output_pdf_path=signed_file_path,
-            signature_data=signature,
-            metadata=metadata_dict
-        )
-        
-        if not success:
-            signed_file_path = temp_file_path
-        
+        # Zwróć plik (już ma metadane)
         return FileResponse(
-            signed_file_path,
+            temp_file_path,
             media_type="application/pdf",
             filename=signed_filename,
             headers={
