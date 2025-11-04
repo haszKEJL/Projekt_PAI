@@ -2,13 +2,15 @@
 
 ## 1. Pobierz Projekt
 
-git clone https://github.com/haszKEJL/Projekt_PAI.git
-cd Projekt_PAI
+#git clone https://github.com/haszKEJL/Projekt_PAI.git
+
+#cd Projekt_PAI
 
 //nie trzeba robic backendu
 ## 2. Backend
 
 cd backend
+
 python -m venv venv
 
 # Windows:
