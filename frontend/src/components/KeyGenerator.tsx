@@ -1,19 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import CryptoService from '../services/cryptoService';
 
+// Komponent: Zarządzanie parą kluczy (generowanie, zapis, eksport klucza publicznego)
+// - Klucze są generowane lokalnie w przeglądarce (Web Crypto API)
+// - Przechowywane w localStorage – nie opuszczają urządzenia użytkownika
+// - Eksportowany jest wyłącznie klucz publiczny (JSON), nigdy prywatny
+
+type StoredKeys = {
+  publicKey: JsonWebKey;
+  privateKey: JsonWebKey;
+  createdAt: string;
+} | null;
+
 const KeyGenerator: React.FC = () => {
-  const [keyStatus, setKeyStatus] = useState<any>(null);
+  // Stan przechowujący informację, czy klucze istnieją i kiedy zostały utworzone
+  const [keyStatus, setKeyStatus] = useState<StoredKeys>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     checkKeys();
   }, []);
 
+  // Sprawdza, czy w localStorage istnieją już zapisane klucze
   const checkKeys = () => {
     const keys = CryptoService.loadKeys();
     setKeyStatus(keys);
   };
 
+  // Generuje nową parę kluczy RSA-PSS (2048/SHA-256), zapisuje w localStorage
   const handleGenerateKeys = async () => {
     setLoading(true);
     try {
@@ -31,6 +45,7 @@ const KeyGenerator: React.FC = () => {
     }
   };
 
+  // Eksportuje klucz publiczny do pliku .json (z prostymi metadanymi)
   const handleExportPublicKey = () => {
     const keys = CryptoService.loadKeys();
     if (!keys) {

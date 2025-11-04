@@ -1,3 +1,8 @@
+"""Warstwa dostępu do danych (SQLite) dla podpisów.
+
+Zawiera definicję modelu `Signature` oraz inicjalizację bazy.
+"""
+
 from sqlalchemy import create_engine, Column, String, Text, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -19,14 +24,20 @@ class Signature(Base):
     __tablename__ = "signatures"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    # Hash pliku PDF (Base64 z SHA-256) – unikalny identyfikator dokumentu
     file_hash = Column(String, nullable=False, unique=True, index=True)
+    # Podpis w Base64 (wynik RSA-PSS nad hashem pliku)
     signature_data = Column(Text, nullable=False)
+    # Klucz publiczny w formacie JWK (JSON jako tekst)
     public_key_jwk = Column(Text, nullable=False)
+    # Dane opisowe osoby podpisującej
     signer_name = Column(String, nullable=True)
     signer_location = Column(String, nullable=True)
     signer_reason = Column(String, nullable=True)
     signer_contact = Column(String, nullable=True)
+    # Oryginalna nazwa pliku (pomocniczo)
     original_filename = Column(String, nullable=True)
+    # Data utworzenia rekordu (UTC)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

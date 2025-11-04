@@ -1,6 +1,10 @@
 import React, { useState, useRef } from 'react';
 import apiService from '../services/apiService';
 
+// Komponent: Weryfikacja podpisu
+// - Użytkownik dostarcza podpisany PDF i plik z kluczem publicznym (.json)
+// - Backend odnajduje podpis po hash-u pliku i weryfikuje podpis z dostarczonym kluczem
+
 const SignatureVerifier: React.FC = () => {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [keyFile, setKeyFile] = useState<File | null>(null);
@@ -11,6 +15,7 @@ const SignatureVerifier: React.FC = () => {
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const keyInputRef = useRef<HTMLInputElement>(null);
 
+  // Zapamiętuje wybrany PDF i czyści poprzedni wynik
   const handlePdfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -19,6 +24,7 @@ const SignatureVerifier: React.FC = () => {
     }
   };
 
+  // Zapamiętuje wybrany klucz publiczny (.json)
   const handleKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -27,6 +33,7 @@ const SignatureVerifier: React.FC = () => {
     }
   };
 
+  // Wysyła pliki do weryfikacji, wyświetla wynik
   const handleVerify = async () => {
     if (!pdfFile || !keyFile) {
       alert('❌ Wgraj oba pliki!');
@@ -54,6 +61,7 @@ const SignatureVerifier: React.FC = () => {
     }
   };
 
+  // Czyści formularz i resetuje inputy plików (również wizualnie)
   const handleReset = () => {
     // ✅ Wyczyść pliki
     setPdfFile(null);
@@ -192,7 +200,7 @@ const SignatureVerifier: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ DODANE: Przycisk do weryfikacji kolejnego pliku */}
+          {/* Przycisk do weryfikacji kolejnego pliku */}
           <button 
             onClick={handleReset} 
             className="btn btn--secondary mt-2"

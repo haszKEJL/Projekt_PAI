@@ -1,3 +1,10 @@
+"""Funkcje kryptograficzne po stronie backendu.
+
+Weryfikacja podpisu RSA-PSS z wykorzystaniem klucza publicznego w formacie JWK.
+Uwaga: Backend w tym rozwiązaniu nie modyfikuje zawartości PDF – przechowuje tylko
+metadane i podpis skojarzony z hashem pliku.
+"""
+
 import hashlib
 import base64
 import json
@@ -12,7 +19,7 @@ class CryptoVerificationService:
     
     @staticmethod
     def calculate_sha256_hash(data: bytes) -> str:
-        """Oblicza SHA-256 hash z danych"""
+        """Oblicza SHA-256 hash z danych i zwraca go w Base64 (nie URL-safe)."""
         hash_digest = hashlib.sha256(data).digest()
         return base64.b64encode(hash_digest).decode()
     
@@ -42,6 +49,7 @@ class CryptoVerificationService:
                 return (False, "Nieprawidłowy typ klucza (oczekiwano RSA)")
             
             # 2. Konwertuj n i e z Base64URL do liczb
+            #    (pamiętaj o odpowiednim paddingu dla Base64URL)
             n = int.from_bytes(
                 base64.urlsafe_b64decode(public_key_dict['n'] + '=='),
                 byteorder='big'
