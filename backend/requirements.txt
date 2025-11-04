@@ -4,5 +4,4 @@ python-multipart==0.0.12
 sqlalchemy==2.0.36
 cryptography==43.0.3
 pydantic==2.10.2
-pypdf2 
-reportlab
+PyPDF2==3.0.1
