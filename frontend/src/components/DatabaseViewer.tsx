@@ -32,8 +32,9 @@ const DatabaseViewer: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<any>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const API_URL = 'http://localhost:8000/api';
+  const API_BASE_URL = 'https://projekt-pai-gr5.onrender.com/api';
 
   useEffect(() => {
     fetchData();
@@ -42,12 +43,14 @@ const DatabaseViewer: React.FC = () => {
 
   const fetchData = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const response = await axios.get(`${API_URL}/admin/signatures`);
+      const response = await axios.get(`${API_BASE_URL}/admin/signatures`);
       setRecords(response.data.records);
-    } catch (error) {
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.detail || error.message || 'Nieznany błąd';
       console.error('Error fetching signatures:', error);
-      alert('❌ Błąd podczas pobierania danych z bazy');
+      setError(`❌ Błąd: ${errorMsg}`);
     } finally {
       setLoading(false);
     }
@@ -55,16 +58,16 @@ const DatabaseViewer: React.FC = () => {
 
   const fetchDatabaseInfo = async () => {
     try {
-      const response = await axios.get(`${API_URL}/admin/database/info`);
+      const response = await axios.get(`${API_BASE_URL}/admin/database/info`);
       setDbInfo(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching database info:', error);
     }
   };
 
   const viewDetails = async (id: string) => {
     try {
-      const response = await axios.get(`${API_URL}/admin/signatures/${id}`);
+      const response = await axios.get(`${API_BASE_URL}/admin/signatures/${id}`);
       setSelectedRecord(response.data);
       setShowDetails(true);
     } catch (error) {
@@ -76,7 +79,7 @@ const DatabaseViewer: React.FC = () => {
     if (!confirm('Czy na pewno chcesz usunąć ten rekord?')) return;
 
     try {
-      await axios.delete(`${API_URL}/admin/signatures/${id}`);
+      await axios.delete(`${API_BASE_URL}/admin/signatures/${id}`);
       alert('✅ Rekord usunięty');
       fetchData();
     } catch (error) {
@@ -88,7 +91,19 @@ const DatabaseViewer: React.FC = () => {
     <div className="database-viewer">
       <h2>🗄️ Panel Administracyjny Bazy Danych</h2>
 
-      {/* Database Info */}
+      {error && (
+        <div style={{
+          background: '#fee',
+          border: '2px solid #f44',
+          color: '#c00',
+          padding: '16px',
+          borderRadius: '8px',
+          marginBottom: '20px'
+        }}>
+          {error}
+        </div>
+      )}
+
       {dbInfo && (
         <div className="db-info-section">
           <h3>📊 Informacje o bazie danych</h3>
@@ -142,7 +157,6 @@ const DatabaseViewer: React.FC = () => {
         </div>
       )}
 
-      {/* Records Table */}
       <div className="records-section">
         <div className="section-header">
           <h3>📄 Rekordy w bazie danych ({records.length})</h3>
@@ -213,7 +227,6 @@ const DatabaseViewer: React.FC = () => {
         )}
       </div>
 
-      {/* Details Modal */}
       {showDetails && selectedRecord && (
         <div className="modal-overlay" onClick={() => setShowDetails(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>

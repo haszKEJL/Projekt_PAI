@@ -22,7 +22,6 @@ const PdfUploader: React.FC = () => {
     }
   };
 
-  // Obsługa drag and drop
   const handleDrag = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
