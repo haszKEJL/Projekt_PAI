@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .routes import signature_routes, admin_routes
 from .database import init_db
-import os
 
 app = FastAPI(
     title="PDF Signature System API",
@@ -10,33 +9,29 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# ✅ CORS - POPRAWIONA KONFIGURACJA DLA RENDER.COM
-# Pobierz adres frontenda ze zmiennej środowiskowej lub użyj localhost
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
-
-origins = [
-    "http://localhost",
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:8000",
-    "http://localhost:8080",
-    "https://projekt-pai-gr5.onrender.com/api",
-    # Dodaj tutaj URL Twojego frontenda na Render.com:
-    FRONTEND_URL,
-    # Lub jeśli hosting na innym serwisie, dodaj bezpośrednio:
-    # "https://twoj-frontend-nazwa.vercel.app",
-    # "https://twoj-frontend-nazwa.netlify.app",
-]
-
-# ✅ BARDZO WAŻNE: CORS middleware MUSI być dodany zaraz po stworzeniu app!
+# ✅ CORS - POPRAWIONA KONFIGURACJA
+# Zezwól na requesty z frontend'u (zarówno localhost jak i Render.com)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Konkretne originy - NIGDY nie używaj ["*"] z allow_credentials=True
+    allow_origins=[
+        "http://localhost",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:8000",
+        "http://127.0.0.1",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "https://projekt-pai-gr5.onrender.com/api",
+        # Dodaj URL frontenda na Render/Vercel/Netlify jeśli będzie hostowany:
+        # "https://twoj-frontend.vercel.app",
+        # "https://twoj-frontend.netlify.app",
+    ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],  # GET, POST, PUT, DELETE, OPTIONS
     allow_headers=["*"],
     expose_headers=["*"],
-    max_age=3600,  # Cache CORS odpowiedzi przez 1 godzinę
+    max_age=3600,
 )
 
 # Inicjalizuj bazę
@@ -54,8 +49,7 @@ async def root():
 async def health():
     return {"status": "healthy", "database": "connected", "cors": "enabled"}
 
-# ✅ Dodatkowy endpoint diagnostyczny
+# ✅ Obsługa preflight OPTIONS
 @app.options("/{full_path:path}")
 async def preflight_handler(full_path: str):
-    """Obsługuje preflight OPTIONS requests"""
     return {}
