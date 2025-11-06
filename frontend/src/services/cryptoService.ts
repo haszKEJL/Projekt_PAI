@@ -1,14 +1,23 @@
 // Serwis kryptograficzny oparty na Web Crypto API (działa w przeglądarce)
+
 // Uwaga: Klucze generowane lokalnie nie są wysyłane do backendu.
+
 class CryptoService {
   /**
-   * Generuje parę kluczy RSA-PSS 2048/SHA-256 do podpisywania i weryfikacji
+   * Generuje parę kluczy RSA-PSS z wybranym rozmiarem klucza
+   * @param keySize - Rozmiar klucza w bitach (1024, 2048, 3072, 4096, 8192)
    */
-  async generateKeyPair(): Promise<CryptoKeyPair> {
+  async generateKeyPair(keySize: number = 2048): Promise<CryptoKeyPair> {
+    // Walidacja rozmiaru klucza
+    const validKeySizes = [1024, 2048, 3072, 4096, 8192];
+    if (!validKeySizes.includes(keySize)) {
+      throw new Error(`Nieprawidłowy rozmiar klucza. Dozwolone wartości: ${validKeySizes.join(', ')}`);
+    }
+
     return await window.crypto.subtle.generateKey(
       {
         name: "RSA-PSS",
-        modulusLength: 2048,
+        modulusLength: keySize,
         publicExponent: new Uint8Array([1, 0, 1]),
         hash: "SHA-256",
       },
@@ -50,18 +59,31 @@ class CryptoService {
     return window.btoa(binary);
   }
 
-  /** Zapisuje parę kluczy w localStorage (z prostymi metadanymi) */
-  saveKeys(keyPair: { publicKey: JsonWebKey; privateKey: JsonWebKey }, keyName: string = 'default'): void {
+  /** 
+   * Zapisuje parę kluczy w localStorage (z prostymi metadanymi) 
+   * @param keySize - Rozmiar klucza w bitach
+   */
+  saveKeys(
+    keyPair: { publicKey: JsonWebKey; privateKey: JsonWebKey },
+    keyName: string = 'default',
+    keySize: number = 2048
+  ): void {
     const keysData = {
       publicKey: keyPair.publicKey,
       privateKey: keyPair.privateKey,
+      keySize: keySize,
       createdAt: new Date().toISOString(),
     };
     localStorage.setItem(`pdf_signature_keys_${keyName}`, JSON.stringify(keysData));
   }
 
   /** Odczytuje parę kluczy z localStorage (lub null, jeśli brak) */
-  loadKeys(keyName: string = 'default'): { publicKey: JsonWebKey; privateKey: JsonWebKey; createdAt: string } | null {
+  loadKeys(keyName: string = 'default'): { 
+    publicKey: JsonWebKey; 
+    privateKey: JsonWebKey; 
+    keySize?: number;
+    createdAt: string 
+  } | null {
     const data = localStorage.getItem(`pdf_signature_keys_${keyName}`);
     return data ? JSON.parse(data) : null;
   }

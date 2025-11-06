@@ -11,6 +11,7 @@ const PdfUploader: React.FC = () => {
     contact: '',
   });
   const [loading, setLoading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -18,6 +19,32 @@ const PdfUploader: React.FC = () => {
       setFile(selectedFile);
     } else {
       alert('❌ Proszę wybrać plik PDF');
+    }
+  };
+
+  // Obsługa drag and drop
+  const handleDrag = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const droppedFile = e.dataTransfer.files[0];
+      if (droppedFile.type === 'application/pdf') {
+        setFile(droppedFile);
+      } else {
+        alert('❌ Proszę wybrać plik PDF');
+      }
     }
   };
 
@@ -29,7 +56,7 @@ const PdfUploader: React.FC = () => {
 
     const keys = CryptoService.loadKeys();
     if (!keys) {
-      alert('❌ Najpierw wygeneruj klucze w zakładce "Zarządzanie Kluczami"!');
+      alert('❌ Najpierw wygeneruj klucze w zakładce "Klucze"!');
       return;
     }
 
@@ -39,23 +66,22 @@ const PdfUploader: React.FC = () => {
     }
 
     setLoading(true);
-
     try {
-      // 1. Przygotuj plik Z METADANAMI
+      const keySize = keys.keySize || 2048;
+
       const formData = new FormData();
       formData.append('file', file);
       formData.append('metadata', JSON.stringify({
         ...metadata,
         filename: file.name,
+        keySize: keySize,
       }));
 
       const prepareResponse = await apiService.prepareSignatureWithMetadata(formData);
 
-      // 2. Konwertuj hash z Base64 do ArrayBuffer
       const fileHashBase64 = prepareResponse.file_hash;
       const hashBytes = Uint8Array.from(atob(fileHashBase64), c => c.charCodeAt(0));
 
-      // 3. Podpisz hash
       const privateKeyObj = await window.crypto.subtle.importKey(
         'jwk',
         keys.privateKey,
@@ -63,10 +89,9 @@ const PdfUploader: React.FC = () => {
         false,
         ['sign']
       );
-      
+
       const signature = await CryptoService.signHash(hashBytes.buffer, privateKeyObj);
 
-      // 4. Wyślij podpis
       const embedData = new FormData();
       embedData.append('temp_file_path', prepareResponse.temp_file_path);
       embedData.append('signature', CryptoService.arrayBufferToBase64(signature));
@@ -74,11 +99,11 @@ const PdfUploader: React.FC = () => {
       embedData.append('metadata', JSON.stringify({
         ...metadata,
         filename: file.name,
+        keySize: keySize,
       }));
 
       const signedBlob = await apiService.embedSignature(embedData);
 
-      // 5. Pobierz
       const url = URL.createObjectURL(signedBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -87,7 +112,6 @@ const PdfUploader: React.FC = () => {
       URL.revokeObjectURL(url);
 
       alert('✅ Dokument został pomyślnie podpisany!');
-      
       setFile(null);
       setMetadata({ name: '', location: '', reason: '', contact: '' });
     } catch (error: any) {
@@ -98,81 +122,100 @@ const PdfUploader: React.FC = () => {
   };
 
   return (
-    <div>
+    <div className="pdf-uploader">
       <h2>✍️ Podpisywanie Dokumentu PDF</h2>
 
       <div className="info-box">
-        <h3>📝 Instrukcja</h3>
-        <ol>
-          <li>Wgraj dokument PDF który chcesz podpisać</li>
-          <li>Wypełnij metadane (kto, gdzie, dlaczego)</li>
-          <li>Kliknij "Podpisz PDF" - podpisany plik zostanie pobrany automatycznie</li>
-        </ol>
+        <h3>ℹ️ Jak podpisać dokument?</h3>
+        <ul>
+          <li>Upewnij się, że masz wygenerowane klucze (zakładka Klucze)</li>
+          <li>Wybierz plik PDF do podpisania</li>
+          <li>Wypełnij dane osoby podpisującej</li>
+          <li>Kliknij "Podpisz dokument"</li>
+          <li>Pobierz podpisany plik PDF</li>
+        </ul>
       </div>
 
-      <div className="form-group">
-        <label className="form-label">📄 Wybierz Dokument PDF</label>
-        <div className="file-upload-wrapper">
-          <label className={`file-upload-label ${file ? 'has-file' : ''}`}>
-            <input type="file" accept=".pdf" onChange={handleFileChange} />
-            <span>{file ? `✅ ${file.name}` : '📁 Kliknij aby wybrać plik PDF'}</span>
-          </label>
+      <div 
+        className={`upload-zone ${dragActive ? 'drag-over' : ''}`}
+        onClick={() => document.getElementById('fileInput')?.click()}
+        onDragEnter={handleDrag}
+        onDragLeave={handleDrag}
+        onDragOver={handleDrag}
+        onDrop={handleDrop}
+      >
+        <span className="upload-icon">📄</span>
+        <p className="upload-text">
+          {file ? `Wybrano: ${file.name}` : 'Kliknij lub przeciągnij plik PDF'}
+        </p>
+        <p className="upload-hint">Obsługiwane formaty: PDF</p>
+        <input
+          id="fileInput"
+          type="file"
+          accept=".pdf"
+          onChange={handleFileChange}
+          className="file-input"
+        />
+      </div>
+
+      {file && (
+        <div className="file-info">
+          <h4>📋 Informacje o pliku</h4>
+          <p><strong>Nazwa:</strong> {file.name}</p>
+          <p><strong>Rozmiar:</strong> {(file.size / 1024).toFixed(2)} KB</p>
+        </div>
+      )}
+
+      <div className="metadata-form">
+        <h3>👤 Dane osoby podpisującej</h3>
+        
+        <div className="form-group">
+          <label>Imię i nazwisko *</label>
+          <input
+            type="text"
+            value={metadata.name}
+            onChange={(e) => setMetadata({ ...metadata, name: e.target.value })}
+            placeholder="Jan Kowalski"
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Lokalizacja</label>
+          <input
+            type="text"
+            value={metadata.location}
+            onChange={(e) => setMetadata({ ...metadata, location: e.target.value })}
+            placeholder="Warszawa, Polska"
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Powód podpisu</label>
+          <input
+            type="text"
+            value={metadata.reason}
+            onChange={(e) => setMetadata({ ...metadata, reason: e.target.value })}
+            placeholder="Zatwierdzenie dokumentu"
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Kontakt</label>
+          <input
+            type="text"
+            value={metadata.contact}
+            onChange={(e) => setMetadata({ ...metadata, contact: e.target.value })}
+            placeholder="jan.kowalski@example.com"
+          />
         </div>
       </div>
 
-      <div className="form-group">
-        <label className="form-label">👤 Imię i Nazwisko *</label>
-        <input
-          type="text"
-          placeholder="Jan Kowalski"
-          value={metadata.name}
-          onChange={(e) => setMetadata({ ...metadata, name: e.target.value })}
-          className="form-control"
-        />
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">📍 Lokalizacja</label>
-        <input
-          type="text"
-          placeholder="Warszawa, Polska"
-          value={metadata.location}
-          onChange={(e) => setMetadata({ ...metadata, location: e.target.value })}
-          className="form-control"
-        />
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">💬 Powód Podpisania</label>
-        <input
-          type="text"
-          placeholder="Akceptacja dokumentu"
-          value={metadata.reason}
-          onChange={(e) => setMetadata({ ...metadata, reason: e.target.value })}
-          className="form-control"
-        />
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">📧 Kontakt (email/telefon)</label>
-        <input
-          type="text"
-          placeholder="jan.kowalski@example.com"
-          value={metadata.contact}
-          onChange={(e) => setMetadata({ ...metadata, contact: e.target.value })}
-          className="form-control"
-        />
-      </div>
-
-      <button onClick={handleSign} disabled={loading || !file} className="btn btn--primary">
-        {loading ? (
-          <>
-            <span className="spinner"></span>
-            Podpisuję dokument...
-          </>
-        ) : (
-          <>✍️ Podpisz PDF</>
-        )}
+      <button
+        onClick={handleSign}
+        disabled={loading || !file}
+        className="btn btn--success btn--large"
+      >
+        {loading ? '🔄 Podpisuję...' : '✍️ Podpisz Dokument'}
       </button>
     </div>
   );

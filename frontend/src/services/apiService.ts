@@ -1,37 +1,40 @@
 import axios from 'axios';
 
-//const API_BASE_URL = 'http://localhost:8000/api';
-const API_BASE_URL = 'https://projekt-pai-gr5.onrender.com/api';
+const API_BASE_URL = 'http://localhost:8000/api';
 
-const apiClient = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
+const apiService = {
+  // Przygotowuje plik do podpisania (z metadanymi)
+  prepareSignatureWithMetadata: async (formData: FormData) => {
+    const response = await axios.post(
+      `${API_BASE_URL}/signature/prepare-signature-with-metadata`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+    return response.data;
   },
-});
 
-class ApiService {
-  async prepareSignatureWithMetadata(formData: FormData): Promise<any> {
-    const response = await apiClient.post('/signature/prepare-signature-with-metadata', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+  // Osadza podpis w PDF
+  embedSignature: async (formData: FormData) => {
+    const response = await axios.post(
+      `${API_BASE_URL}/signature/embed-signature`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        responseType: 'blob',
+      }
+    );
     return response.data;
-  }
+  },
 
-  async embedSignature(data: any): Promise<Blob> {
-    const response = await apiClient.post('/signature/embed-signature', data, {
-      responseType: 'blob',
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+  // Weryfikuje podpis - DODANE!
+  verifySignature: async (formData: FormData) => {
+    const response = await axios.post(
+      `${API_BASE_URL}/signature/verify-signature`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
     return response.data;
-  }
+  },
+};
 
-  async verifySignatureManual(formData: FormData): Promise<any> {
-    const response = await apiClient.post('/signature/verify-signature-manual', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-    return response.data;
-  }
-}
-
-export default new ApiService();
+export default apiService;

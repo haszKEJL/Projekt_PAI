@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import signature_routes
+from .routes import signature_routes, admin_routes
 from .database import init_db
 
 app = FastAPI(
@@ -23,6 +23,7 @@ init_db()
 
 # Routes
 app.include_router(signature_routes.router, prefix="/api")
+app.include_router(admin_routes.router, prefix="/api")
 
 @app.get("/")
 async def root():
