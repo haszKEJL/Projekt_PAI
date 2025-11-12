@@ -4,7 +4,6 @@ import RegisterPage from './pages/RegisterPage';
 import SignerPage from './pages/SignerPage';
 import VerifierPage from './pages/VerifierPage';
 import authService from './services/authService';
-import KeyGenerator from './components/KeyGenerator';
 import './App.css';
 
 function App() {
@@ -48,10 +47,6 @@ function App() {
             </AdminRoute>
           } 
         />
-          <Routes>
-    <Route path="/keys" element={<KeyGenerator />} />
-    {/* ... inne routes */}
-  </Routes>
         <Route path="/" element={<Navigate to="/login" />} />
       </Routes>
     </BrowserRouter>

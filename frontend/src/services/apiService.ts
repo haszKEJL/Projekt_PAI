@@ -1,8 +1,8 @@
 import axios from 'axios';
 import authService from './authService';
 
-const API_BASE_URL = 'https://projekt-pai-gr5.onrender.com/api';
-//const API_BASE_URL = 'http://localhost:8000/api';
+//const API_BASE_URL = 'https://projekt-pai-gr5.onrender.com/api';
+const API_BASE_URL = 'http://localhost:8000/api';
 
 // Interceptor - dodaje token do każdego requesta
 axios.interceptors.request.use(

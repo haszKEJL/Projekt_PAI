@@ -12,6 +12,7 @@ const PdfUploader: React.FC = () => {
   });
   const [loading, setLoading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [keySize] = useState<number>(2048);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -53,12 +54,6 @@ const PdfUploader: React.FC = () => {
       return;
     }
 
-    const keys = CryptoService.loadKeys();
-    if (!keys) {
-      alert('❌ Najpierw wygeneruj klucze w zakładce "Klucze"!');
-      return;
-    }
-
     if (!metadata.name.trim()) {
       alert('❌ Podaj swoje imię i nazwisko!');
       return;
@@ -66,20 +61,46 @@ const PdfUploader: React.FC = () => {
 
     setLoading(true);
     try {
-      const keySize = keys.keySize || 2048;
+      // 1. SPRAWDŹ CZY KLUCZE ISTNIEJĄ, JEŚLI NIE - WYGENERUJ
+      let keys = CryptoService.loadKeys();
+      
+      if (!keys) {
+        console.log('🔑 Brak kluczy - generuję automatycznie...');
+        
+        const keyPair = await CryptoService.generateKeyPair(keySize);
+        const exportedPublic = await CryptoService.exportKey(keyPair.publicKey);
+        const exportedPrivate = await CryptoService.exportKey(keyPair.privateKey);
+        
+        CryptoService.saveKeys(
+          { publicKey: exportedPublic, privateKey: exportedPrivate },
+          keySize
+        );
+        
+        console.log('✅ Klucze wygenerowane i zapisane automatycznie');
+        
+        keys = CryptoService.loadKeys();
+        
+        if (!keys) {
+          throw new Error('Błąd zapisywania kluczy do localStorage');
+        }
+      } else {
+        console.log('✅ Użyto istniejących kluczy z localStorage');
+      }
 
-      // 1. Przygotuj dokument do podpisu
+      // 2. Przygotuj dokument do podpisu
       const formData = new FormData();
       formData.append('file', file);
       formData.append('metadata', JSON.stringify({
         ...metadata,
         filename: file.name,
-        keySize: keySize,
+        keySize: keys.keySize,
       }));
 
+      console.log('📤 Wysyłam PDF do backendu...');
       const prepareResponse = await apiService.prepareSignatureWithMetadata(formData);
 
-      // 2. Podpisz hash kluczem prywatnym
+      // 3. Podpisz hash kluczem prywatnym
+      console.log('🔐 Podpisuję hash...');
       const fileHashBase64 = prepareResponse.file_hash;
       const hashBytes = Uint8Array.from(atob(fileHashBase64), c => c.charCodeAt(0));
 
@@ -93,7 +114,8 @@ const PdfUploader: React.FC = () => {
 
       const signature = await CryptoService.signHash(hashBytes.buffer, privateKeyObj);
 
-      // 3. Osadź podpis w PDF i zapisz w bazie
+      // 4. Osadź podpis w PDF i zapisz w bazie
+      console.log('💾 Zapisuję podpisany PDF...');
       const embedData = new FormData();
       embedData.append('temp_file_path', prepareResponse.temp_file_path);
       embedData.append('signature', CryptoService.arrayBufferToBase64(signature));
@@ -101,17 +123,18 @@ const PdfUploader: React.FC = () => {
       embedData.append('metadata', JSON.stringify({
         ...metadata,
         filename: file.name,
-        keySize: keySize,
+        keySize: keys.keySize,
       }));
 
-      // POPRAWKA: zmiana z embedSignature na embedSignatureToDb
       const embedResult = await apiService.embedSignatureToDb(embedData);
 
-      alert(`✅ ${embedResult.message || 'Dokument został pomyślnie podpisany!'}`);
+      console.log('✅ Dokument podpisany!');
+      alert(`✅ ${embedResult.message || 'Dokument został pomyślnie podpisany!'}\n\nKlucze zapisane w localStorage przeglądarki.`);
+      
       setFile(null);
       setMetadata({ name: '', location: '', reason: '', contact: '' });
     } catch (error: any) {
-      console.error('Signing error:', error);
+      console.error('❌ Błąd podpisywania:', error);
       alert(`❌ Błąd: ${error.message || 'Nieznany błąd'}`);
     } finally {
       setLoading(false);
@@ -125,10 +148,10 @@ const PdfUploader: React.FC = () => {
       <div className="info-box">
         <h3>ℹ️ Jak podpisać dokument?</h3>
         <ul>
-          <li>Upewnij się, że masz wygenerowane klucze (zakładka Klucze)</li>
           <li>Wybierz plik PDF do podpisania</li>
           <li>Wypełnij dane osoby podpisującej</li>
           <li>Kliknij "Podpisz dokument"</li>
+          <li>Klucze zostaną wygenerowane automatycznie przy pierwszym podpisie</li>
           <li>Pobierz podpisany plik w panelu administratora</li>
         </ul>
       </div>
