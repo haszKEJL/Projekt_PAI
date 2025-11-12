@@ -1,20 +1,27 @@
 """Endpointy administracyjne do przeglądania bazy danych."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 from datetime import datetime
-from ..database import get_db, Signature
+import os
+
+from ..database import get_db, Signature, User
+from ..auth import get_current_user
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @router.get("/signatures")
-async def get_all_signatures(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """
-    Pobiera wszystkie podpisy z bazy danych.
-    Zwraca dane w czytelnym formacie do wyświetlenia w interfejsie.
-    """
+async def get_all_signatures(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """Pobiera wszystkie podpisy z bazy danych"""
+    
+    if current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Tylko administratorzy mają dostęp")
+    
     signatures = db.query(Signature).order_by(Signature.created_at.desc()).all()
     
     records = []
@@ -29,7 +36,8 @@ async def get_all_signatures(db: Session = Depends(get_db)) -> Dict[str, Any]:
             "signer_contact": sig.signer_contact or "Brak",
             "original_filename": sig.original_filename or "Brak",
             "created_at": sig.created_at.isoformat(),
-            "created_at_formatted": sig.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            "created_at_formatted": sig.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "username": sig.signer.username
         })
     
     return {
@@ -39,12 +47,20 @@ async def get_all_signatures(db: Session = Depends(get_db)) -> Dict[str, Any]:
 
 
 @router.get("/signatures/{signature_id}")
-async def get_signature_details(signature_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """Pobiera szczegóły pojedynczego podpisu."""
+async def get_signature_details(
+    signature_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """Pobiera szczegóły pojedynczego podpisu"""
+    
+    if current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Tylko administratorzy mają dostęp")
+    
     sig = db.query(Signature).filter(Signature.id == signature_id).first()
     
     if not sig:
-        return {"error": "Signature not found"}
+        raise HTTPException(status_code=404, detail="Signature not found")
     
     return {
         "id": sig.id,
@@ -56,21 +72,24 @@ async def get_signature_details(signature_id: str, db: Session = Depends(get_db)
         "signer_reason": sig.signer_reason,
         "signer_contact": sig.signer_contact,
         "original_filename": sig.original_filename,
-        "created_at": sig.created_at.isoformat()
+        "created_at": sig.created_at.isoformat(),
+        "username": sig.signer.username
     }
 
 
 @router.get("/database/info")
-async def get_database_info(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """Zwraca informacje o strukturze bazy danych."""
+async def get_database_info(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """Zwraca informacje o strukturze bazy danych"""
     
-    # Pobierz licznik rekordów
+    if current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Tylko administratorzy mają dostęp")
+    
     total_signatures = db.query(Signature).count()
-    
-    # Ostatni podpis
     latest_signature = db.query(Signature).order_by(Signature.created_at.desc()).first()
     
-    # Struktura kolumn
     columns = [
         {"name": "id", "type": "String (UUID)", "description": "Unikalny identyfikator podpisu"},
         {"name": "file_hash", "type": "String", "description": "Hash SHA-256 pliku PDF (Base64)"},
@@ -94,14 +113,111 @@ async def get_database_info(db: Session = Depends(get_db)) -> Dict[str, Any]:
 
 
 @router.delete("/signatures/{signature_id}")
-async def delete_signature(signature_id: str, db: Session = Depends(get_db)) -> Dict[str, str]:
-    """Usuwa podpis z bazy danych (tylko do celów administracyjnych)."""
+async def delete_signature(
+    signature_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Dict[str, str]:
+    """Usuwa podpis z bazy danych (tylko admin)"""
+    
+    if current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Tylko administratorzy mogą usuwać")
+    
     sig = db.query(Signature).filter(Signature.id == signature_id).first()
     
     if not sig:
-        return {"status": "error", "message": "Signature not found"}
+        raise HTTPException(status_code=404, detail="Signature not found")
+    
+    # Usuń plik z dysku jeśli istnieje
+    if sig.signed_pdf_path and os.path.exists(sig.signed_pdf_path):
+        try:
+            os.remove(sig.signed_pdf_path)
+        except Exception as e:
+            print(f"Błąd usuwania pliku: {e}")
     
     db.delete(sig)
     db.commit()
     
     return {"status": "success", "message": f"Signature {signature_id} deleted"}
+
+
+@router.get("/documents")
+async def list_all_documents(
+    username: str = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Lista wszystkich dokumentów (opcjonalnie filtruj po username)"""
+    
+    if current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Tylko administratorzy mają dostęp")
+    
+    query = db.query(Signature)
+    
+    # Filtruj po username jeśli podano
+    if username:
+        query = query.join(User).filter(User.username == username)
+    
+    documents = query.order_by(Signature.created_at.desc()).all()
+    
+    # Grupuj według użytkowników
+    users_dict = {}
+    for doc in documents:
+        user_username = doc.signer.username
+        if user_username not in users_dict:
+            users_dict[user_username] = []
+        users_dict[user_username].append({
+            'id': doc.id,
+            'filename': doc.original_filename,
+            'signer': doc.signer_name,
+            'signed_at': doc.created_at.isoformat(),
+            'location': doc.signer_location,
+            'reason': doc.signer_reason
+        })
+    
+    return {
+        'total': len(documents),
+        'users': users_dict,
+        'documents': [
+            {
+                'id': doc.id,
+                'filename': doc.original_filename,
+                'signer': doc.signer_name,
+                'username': doc.signer.username,
+                'signed_at': doc.created_at.isoformat(),
+                'location': doc.signer_location,
+                'reason': doc.signer_reason
+            }
+            for doc in documents
+        ]
+    }
+
+
+@router.delete("/documents/{document_id}")
+async def delete_document(
+    document_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Usuwa dokument z bazy (tylko admin)"""
+    
+    if current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Tylko administratorzy mogą usuwać dokumenty")
+    
+    document = db.query(Signature).filter(Signature.id == document_id).first()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Dokument nie znaleziony")
+    
+    # Usuń plik z dysku jeśli istnieje
+    if document.signed_pdf_path and os.path.exists(document.signed_pdf_path):
+        try:
+            os.remove(document.signed_pdf_path)
+        except Exception as e:
+            print(f"Błąd usuwania pliku: {e}")
+    
+    # Usuń z bazy
+    db.delete(document)
+    db.commit()
+    
+    return {"message": "Dokument usunięty", "filename": document.original_filename}

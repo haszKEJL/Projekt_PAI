@@ -1,7 +1,9 @@
-fastapi==0.115.0
-uvicorn==0.32.0
-python-multipart==0.0.12
-sqlalchemy==2.0.36
-cryptography==43.0.3
-pydantic==2.10.2
-PyPDF2==3.0.1
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+sqlalchemy>=2.0.35
+cryptography>=41.0.7
+PyPDF2>=3.0.1
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.6
+pydantic[email]>=2.5.0

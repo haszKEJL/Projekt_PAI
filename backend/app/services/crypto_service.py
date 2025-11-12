@@ -1,84 +1,131 @@
-"""Funkcje kryptograficzne po stronie backendu.
-
-Weryfikacja podpisu RSA-PSS z wykorzystaniem klucza publicznego w formacie JWK.
-
-Uwaga: Backend w tym rozwiązaniu nie modyfikuje zawartości PDF – przechowuje tylko
-metadane i podpis skojarzony z hashem pliku.
-"""
-
-import hashlib
-import base64
 import json
-from typing import Tuple
+import base64
+import hashlib
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
+from PyPDF2 import PdfReader, PdfWriter
+import io
 
 
-class CryptoVerificationService:
+def calculate_pdf_content_hash(pdf_content: bytes) -> bytes:
+    """
+    Oblicza hash ZAWARTOŚCI PDF (stron) bez metadanych.
+    Używane zarówno przy podpisywaniu jak i weryfikacji.
+    """
+    try:
+        pdf_reader = PdfReader(io.BytesIO(pdf_content))
+        writer = PdfWriter()
+        
+        # Skopiuj tylko strony (bez metadanych)
+        for page in pdf_reader.pages:
+            writer.add_page(page)
+        
+        # Zapisz do bufora
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        content_only = buffer.getvalue()
+        
+        # Oblicz hash
+        return hashlib.sha256(content_only).digest()
+    except Exception as e:
+        print(f"⚠️ Błąd obliczania hasha: {e}")
+        # Fallback - hash całego pliku
+        return hashlib.sha256(pdf_content).digest()
 
-    @staticmethod
-    def calculate_sha256_hash(data: bytes) -> str:
-        """Oblicza SHA-256 hash z danych i zwraca go w Base64 (nie URL-safe)."""
-        hash_digest = hashlib.sha256(data).digest()
-        return base64.b64encode(hash_digest).decode()
 
-    @staticmethod
-    def verify_signature(
-        signature_b64: str,
-        public_key_jwk: str,
-        file_hash_b64: str
-    ) -> Tuple[bool, str]:
-        """
-        Weryfikuje podpis cyfrowy RSA-PSS
-
-        Args:
-            signature_b64: Podpis w Base64
-            public_key_jwk: Klucz publiczny w formacie JWK (JSON string)
-            file_hash_b64: Hash pliku w Base64
-
-        Returns:
-            Tuple[bool, str]: (czy_poprawny, wiadomość)
-        """
+def verify_pdf_signature(pdf_content: bytes, public_key_jwk: dict) -> dict:
+    """
+    Weryfikuje podpis cyfrowy PDF.
+    Sprawdza:
+    1. Czy zawartość PDF (strony) nie została zmodyfikowana
+    2. Czy podpis kryptograficzny jest prawidłowy
+    """
+    try:
+        # 1. Wczytaj PDF i wyciągnij metadane
+        pdf_reader = PdfReader(io.BytesIO(pdf_content))
+        
+        if '/Signature' not in pdf_reader.metadata:
+            return {
+                'valid': False, 
+                'error': 'Brak podpisu w PDF - dokument nie został podpisany'
+            }
+        
+        # 2. Parsuj metadane podpisu
+        signature_metadata = json.loads(pdf_reader.metadata['/Signature'])
+        signature_base64 = signature_metadata['signature']
+        file_hash_base64 = signature_metadata['file_hash']
+        metadata = signature_metadata.get('metadata', {})
+        
+        # 3. Konwertuj z Base64
+        signature_bytes = base64.b64decode(signature_base64)
+        original_hash_bytes = base64.b64decode(file_hash_base64)
+        
+        # 4. Oblicz hash AKTUALNEJ zawartości (stron)
+        current_hash = calculate_pdf_content_hash(pdf_content)
+        
+        print(f"🔍 Hash zapisany w podpisie: {base64.b64encode(original_hash_bytes).decode()[:64]}...")
+        print(f"🔍 Hash aktualnej zawartości: {base64.b64encode(current_hash).decode()[:64]}...")
+        
+        # 5. Sprawdź czy zawartość się zgadza
+        if current_hash != original_hash_bytes:
+            return {
+                'valid': False,
+                'error': '⚠️ DOKUMENT ZOSTAŁ ZMODYFIKOWANY! Zawartość nie zgadza się z podpisem.'
+            }
+        
+        # 6. Konwertuj JWK na klucz publiczny RSA
+        def base64url_to_int(data: str) -> int:
+            padding_needed = 4 - (len(data) % 4)
+            if padding_needed and padding_needed != 4:
+                data += '=' * padding_needed
+            data = data.replace('-', '+').replace('_', '/')
+            return int.from_bytes(base64.b64decode(data), byteorder='big')
+        
+        n = base64url_to_int(public_key_jwk['n'])
+        e = base64url_to_int(public_key_jwk['e'])
+        
+        public_numbers = rsa.RSAPublicNumbers(e, n)
+        public_key = public_numbers.public_key(default_backend())
+        
+        # 7. Weryfikuj podpis kryptograficzny
         try:
-            # 1. Dekoduj podpis z Base64
-            signature_bytes = base64.b64decode(signature_b64)
-
-            # 2. Dekoduj hash z Base64
-            hash_bytes = base64.b64decode(file_hash_b64)
-
-            # 3. Parsuj JWK i zbuduj klucz publiczny
-            jwk = json.loads(public_key_jwk)
-            
-            # Konwertuj n i e z Base64URL do int
-            def b64url_to_int(b64_string: str) -> int:
-                # Dodaj padding jeśli potrzebny
-                padding_needed = len(b64_string) % 4
-                if padding_needed:
-                    b64_string += '=' * (4 - padding_needed)
-                # Zamień Base64URL na Base64
-                b64_string = b64_string.replace('-', '+').replace('_', '/')
-                return int.from_bytes(base64.b64decode(b64_string), byteorder='big')
-
-            n = b64url_to_int(jwk['n'])
-            e = b64url_to_int(jwk['e'])
-
-            # Zbuduj klucz publiczny RSA
-            public_key = rsa.RSAPublicNumbers(e, n).public_key(default_backend())
-
-            # 4. Weryfikuj podpis
             public_key.verify(
                 signature_bytes,
-                hash_bytes,
+                original_hash_bytes,
                 padding.PSS(
                     mgf=padding.MGF1(hashes.SHA256()),
                     salt_length=32
                 ),
                 hashes.SHA256()
             )
-
-            return True, "✅ Podpis jest prawidłowy"
-
-        except Exception as e:
-            return False, f"❌ Podpis nieprawidłowy: {str(e)}"
+            
+            return {
+                'valid': True,
+                'message': '✅ Podpis jest prawidłowy! Dokument jest autentyczny i nie został zmodyfikowany.',
+                'metadata': metadata
+            }
+            
+        except Exception as verify_error:
+            print(f"❌ Błąd weryfikacji podpisu RSA: {verify_error}")
+            return {
+                'valid': False,
+                'error': f'❌ Podpis kryptograficzny nieprawidłowy - dokument mógł zostać zmodyfikowany'
+            }
+            
+    except KeyError as e:
+        return {
+            'valid': False, 
+            'error': f'Nieprawidłowa struktura podpisu: brak klucza {str(e)}'
+        }
+    except json.JSONDecodeError:
+        return {
+            'valid': False, 
+            'error': 'Nieprawidłowy format metadanych podpisu'
+        }
+    except Exception as e:
+        print(f"❌ Błąd weryfikacji: {e}")
+        return {
+            'valid': False, 
+            'error': f'Błąd weryfikacji: {str(e)}'
+        }

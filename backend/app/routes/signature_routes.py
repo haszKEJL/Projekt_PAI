@@ -1,15 +1,33 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from PyPDF2 import PdfReader
 import json
 import os
 import tempfile
+import hashlib
+import base64
+import shutil
+import io
 from datetime import datetime
-from ..database import get_db, Signature
-from ..services.crypto_service import CryptoVerificationService
+from pathlib import Path
+
+from ..database import get_db, Signature, User
+from ..services import crypto_service
 from ..services.pdf_service import PdfService
+from ..auth import get_current_user
 
 router = APIRouter(prefix="/signature", tags=["signature"])
+
+# Folder na podpisane PDF-y
+SIGNED_PDF_DIR = Path("signed_pdfs")
+SIGNED_PDF_DIR.mkdir(exist_ok=True)
+
+
+def calculate_sha256_hash(data: bytes) -> str:
+    """Oblicza SHA-256 hash i zwraca jako base64"""
+    hash_bytes = hashlib.sha256(data).digest()
+    return base64.b64encode(hash_bytes).decode('utf-8')
 
 
 @router.get("/")
@@ -21,133 +39,124 @@ async def signature_root():
 async def prepare_signature_with_metadata(
     file: UploadFile = File(...),
     metadata: str = Form(...),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Przygotowuje plik Z METADANAMI do podpisania
-    Zwraca hash FINAŁOWEGO pliku (z metadanymi)
-    
-    NOWE: Sprawdza czy dokument nie był już wcześniej podpisany
-    """
+    """Przygotowuje plik do podpisania"""
     try:
         pdf_content = await file.read()
         metadata_dict = json.loads(metadata)
-
-        # ✅ NOWE: Sprawdź hash ORYGINALNEGO pliku przed przygotowaniem
-        original_hash = CryptoVerificationService.calculate_sha256_hash(pdf_content)
         
-        existing_original = db.query(Signature).filter(
-            Signature.file_hash == original_hash
-        ).first()
+        print(f"\n📄 SPRAWDZANIE PLIKU: {file.filename}")
         
-        if existing_original:
-            raise HTTPException(
-                status_code=409,
-                detail=f"⚠️ Ten dokument został już podpisany przez {existing_original.signer_name or 'kogoś'} w dniu {existing_original.created_at.strftime('%Y-%m-%d %H:%M:%S')}. Nie można podpisać go ponownie."
-            )
-
-        temp_dir = tempfile.gettempdir()
-
-        # Zapisz oryginalny plik
-        original_path = os.path.join(
-            temp_dir,
-            f"orig_{datetime.now().timestamp()}_{file.filename}"
-        )
-
+        # Sprawdź czy PDF już ma podpis
+        try:
+            pdf_reader = PdfReader(io.BytesIO(pdf_content))
+            
+            print(f"📄 PDF Metadata obecne: {pdf_reader.metadata is not None}")
+            if pdf_reader.metadata:
+                print(f"📄 Klucze metadanych: {list(pdf_reader.metadata.keys())}")
+                print(f"📄 /Signature present: {'/Signature' in pdf_reader.metadata}")
+                
+                if '/Signature' in pdf_reader.metadata:
+                    print("🚫 BLOKOWANIE - Dokument już podpisany!")
+                    raise HTTPException(
+                        status_code=400,
+                        detail="❌ Ten dokument jest już podpisany! Nie można ponownie podpisać podpisanego dokumentu."
+                    )
+                else:
+                    print("✅ OK - Dokument nie ma podpisu, można podpisać")
+            else:
+                print("⚠️ Brak metadanych w PDF")
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"⚠️ Błąd sprawdzania metadanych: {e}")
+        
+        # WAŻNE - Oblicz hash ZAWARTOŚCI (bez metadanych)
+        from ..services.crypto_service import calculate_pdf_content_hash
+        file_hash_bytes = calculate_pdf_content_hash(pdf_content)
+        file_hash_b64 = base64.b64encode(file_hash_bytes).decode('utf-8')
+        
+        print(f"📊 Hash zawartości do podpisania: {file_hash_b64[:64]}...")
+        
+        # Zapisz plik tymczasowo
+        temp_dir = tempfile.mkdtemp()
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+        filename = file.filename or "document.pdf"
+        
+        original_path = os.path.join(temp_dir, f"orig_{timestamp}_{filename}")
+        temp_signed_path = os.path.join(temp_dir, f"temp_{timestamp}_{filename}")
+        
         with open(original_path, "wb") as f:
             f.write(pdf_content)
-
-        # Utwórz plik Z METADANAMI
-        temp_signed_path = os.path.join(
-            temp_dir,
-            f"temp_signed_{datetime.now().timestamp()}_{file.filename}"
-        )
-
-        # Dodaj metadane
-        success = PdfService.embed_signature_in_pdf(
-            input_pdf_path=original_path,
-            output_pdf_path=temp_signed_path,
-            signature_data="PENDING",
-            metadata=metadata_dict
-        )
-
-        if not success:
-            temp_signed_path = original_path
-
-        # Oblicz hash FINAŁOWEGO pliku
-        with open(temp_signed_path, 'rb') as f:
-            final_pdf_content = f.read()
-
-        file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(final_pdf_content)
         
-        # ✅ NOWE: Sprawdź też hash pliku z metadanymi
-        existing_with_metadata = db.query(Signature).filter(
-            Signature.file_hash == file_hash_b64
-        ).first()
+        # Skopiuj plik
+        shutil.copy(original_path, temp_signed_path)
         
-        if existing_with_metadata:
-            # Usuń pliki tymczasowe
-            if os.path.exists(original_path):
-                os.remove(original_path)
-            if os.path.exists(temp_signed_path):
-                os.remove(temp_signed_path)
-                
-            raise HTTPException(
-                status_code=409,
-                detail=f"⚠️ Dokument z takimi metadanymi został już podpisany. Zmień dane lub wybierz inny dokument."
-            )
-
         return {
             "success": True,
             "file_hash": file_hash_b64,
             "temp_file_path": temp_signed_path,
-            "original_filename": file.filename
+            "original_filename": filename
         }
-
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Błąd przygotowania: {str(e)}"
-        )
+        raise HTTPException(500, f"Error: {str(e)}")
 
 
-@router.post("/embed-signature")
-async def embed_signature(
+
+@router.post("/embed-signature-to-db")
+async def embed_signature_to_db(
     temp_file_path: str = Form(...),
     signature: str = Form(...),
     public_key: str = Form(...),
     metadata: str = Form(...),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Zapisuje podpis w bazie (plik JUŻ ma metadane!)
-    """
+    """Osadza podpis w PDF i zapisuje w bazie danych"""
     try:
+        metadata_dict = json.loads(metadata)
+        
+        # Wczytaj PDF
         if not os.path.exists(temp_file_path):
-            raise HTTPException(404, "Plik tymczasowy nie znaleziony")
-
-        # Oblicz hash ISTNIEJĄCEGO pliku
+            raise HTTPException(404, "Temporary file not found")
+        
         with open(temp_file_path, 'rb') as f:
             pdf_content = f.read()
-
-        file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
-        metadata_dict = json.loads(metadata)
-
-        # ✅ ULEPSZONE: Sprawdź czy już istnieje (podwójne zabezpieczenie)
-        existing = db.query(Signature).filter(
-            Signature.file_hash == file_hash_b64
-        ).first()
-
-        if existing:
-            raise HTTPException(
-                status_code=409, 
-                detail=f"⚠️ Dokument już podpisany przez {existing.signer_name or 'kogoś'} w dniu {existing.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
+        
+        # Oblicz hash
+        from ..services.crypto_service import calculate_pdf_content_hash
+        file_hash_bytes = calculate_pdf_content_hash(pdf_content)
+        file_hash_b64 = base64.b64encode(file_hash_bytes).decode('utf-8')
+        
+        # Utwórz unikalną nazwę pliku
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        safe_filename = f"{current_user.username}_{timestamp}_{metadata_dict.get('filename', 'document.pdf')}"
+        signed_pdf_path = SIGNED_PDF_DIR / safe_filename
+        
+        # Dodaj timestamp do metadanych
+        metadata_dict['timestamp'] = datetime.utcnow().isoformat()
+        
+        # OSADŹ PODPIS W PDF
+        success = PdfService.embed_signature_in_pdf(
+            input_pdf_path=temp_file_path,
+            output_pdf_path=str(signed_pdf_path),
+            signature_data=signature,
+            file_hash=file_hash_b64,
+            metadata=metadata_dict
+        )
+        
+        if not success:
+            raise HTTPException(500, "Nie udało się osadzić podpisu w PDF")
+        
         # Zapisz w bazie
         new_signature = Signature(
+            user_id=current_user.id,
             file_hash=file_hash_b64,
             signature_data=signature,
             public_key_jwk=public_key,
@@ -155,117 +164,107 @@ async def embed_signature(
             signer_location=metadata_dict.get('location'),
             signer_reason=metadata_dict.get('reason'),
             signer_contact=metadata_dict.get('contact'),
-            original_filename=metadata_dict.get('filename', 'unknown.pdf')
+            original_filename=metadata_dict.get('filename'),
+            signed_pdf_path=str(signed_pdf_path)
         )
-
+        
         db.add(new_signature)
         db.commit()
-
-        # Nazwij plik
-        original_filename = metadata_dict.get('filename', 'document.pdf')
-        signed_filename = original_filename.replace('.pdf', '_signed.pdf')
-
-        # Zwróć plik (już ma metadane)
-        return FileResponse(
-            temp_file_path,
-            media_type="application/pdf",
-            filename=signed_filename,
-            headers={
-                "Content-Disposition": f"attachment; filename={signed_filename}"
-            }
-        )
-
+        
+        # Usuń tymczasowy plik
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        
+        return {
+            "success": True,
+            "message": "✅ PDF podpisany i zapisany w systemie!",
+            "signature_id": new_signature.id,
+            "filename": safe_filename
+        }
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Błąd: {str(e)}")
+        raise HTTPException(500, f"Error: {str(e)}")
+
+
+@router.get("/signed-pdfs")
+async def list_signed_pdfs(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Lista wszystkich podpisanych PDF-ów"""
+    signatures = db.query(Signature).order_by(Signature.created_at.desc()).all()
+    
+    return {
+        "success": True,
+        "count": len(signatures),
+        "documents": [
+            {
+                "id": sig.id,
+                "filename": sig.original_filename,
+                "signer": sig.signer_name,
+                "username": sig.signer.username,
+                "signed_at": sig.created_at.isoformat(),
+                "location": sig.signer_location,
+                "reason": sig.signer_reason
+            }
+            for sig in signatures
+        ]
+    }
+
+
+@router.get("/download-signed-pdf/{signature_id}")
+async def download_signed_pdf(
+    signature_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Pobiera podpisany PDF"""
+    signature = db.query(Signature).filter(Signature.id == signature_id).first()
+    
+    if not signature:
+        raise HTTPException(404, "Podpis nie znaleziony")
+    
+    if not signature.signed_pdf_path or not os.path.exists(signature.signed_pdf_path):
+        raise HTTPException(404, "Plik nie istnieje na serwerze")
+    
+    return FileResponse(
+        signature.signed_pdf_path,
+        filename=signature.original_filename or "signed_document.pdf",
+        media_type='application/pdf'
+    )
 
 
 @router.post("/verify-signature")
 async def verify_signature(
     file: UploadFile = File(...),
-    public_key_file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    public_key: str = Form(...)
 ):
-    """Weryfikacja z ZEWNĘTRZNYM kluczem publicznym"""
+    """Weryfikuje podpis cyfrowy PDF"""
     try:
+        # Wczytaj klucz publiczny z JSON stringa
+        public_key_jwk = json.loads(public_key)
+        
+        # Wczytaj PDF
         pdf_content = await file.read()
-        file_hash_b64 = CryptoVerificationService.calculate_sha256_hash(pdf_content)
-
-        public_key_content = await public_key_file.read()
-
-        try:
-            public_key_json = json.loads(public_key_content.decode('utf-8'))
-        except json.JSONDecodeError:
-            raise HTTPException(400, "Nieprawidłowy format JSON klucza")
-
-        # Sprawdź format klucza
-        if 'publicKey' in public_key_json:
-            public_key_jwk = json.dumps(public_key_json['publicKey'])
-        elif 'kty' in public_key_json:
-            public_key_jwk = json.dumps(public_key_json)
-        else:
-            raise HTTPException(400, "Brak pola 'kty' lub 'publicKey'")
-
-        # Szukaj podpisu w bazie
-        signature_record = db.query(Signature).filter(
-            Signature.file_hash == file_hash_b64
-        ).first()
-
-        if not signature_record:
+        
+        # Weryfikuj używając crypto_service
+        result = crypto_service.verify_pdf_signature(pdf_content, public_key_jwk)
+        
+        if result['valid']:
             return {
-                "valid": False,
-                "message": "❌ Dokument nie został podpisany lub został zmodyfikowany"
-            }
-
-        # Weryfikuj podpis
-        is_valid, message = CryptoVerificationService.verify_signature(
-            signature_record.signature_data,
-            public_key_jwk,
-            file_hash_b64
-        )
-
-        if is_valid:
-            return {
-                "valid": True,
-                "message": "✅ Podpis prawidłowy!",
-                "signature_info": {
-                    "signer_name": signature_record.signer_name or "Nieznany",
-                    "signer_location": signature_record.signer_location or "Brak",
-                    "signed_at": signature_record.created_at.isoformat(),
-                    "signer_contact": signature_record.signer_contact or "Brak",
-                    "signer_reason": signature_record.signer_reason or "Brak",
-                    "verification_method": "RSA-PSS + SHA-256",
-                    "file_hash": file_hash_b64[:32] + "..."
-                }
+                'valid': True,
+                'message': 'Podpis jest prawidłowy!',
+                'metadata': result.get('metadata')
             }
         else:
             return {
-                "valid": False,
-                "message": f"❌ Weryfikacja niepomyślna: {message}"
+                'valid': False,
+                'message': result.get('error', 'Podpis nieprawidłowy')
             }
-
-    except HTTPException:
-        raise
+            
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Nieprawidłowy format klucza publicznego")
     except Exception as e:
-        raise HTTPException(500, f"Błąd: {str(e)}")
-
-
-@router.get("/signatures")
-async def list_signatures(db: Session = Depends(get_db)):
-    """Lista wszystkich podpisów"""
-    signatures = db.query(Signature).all()
-
-    return {
-        "success": True,
-        "count": len(signatures),
-        "signatures": [
-            {
-                "id": sig.id,
-                "signer_name": sig.signer_name,
-                "signed_at": sig.created_at.isoformat(),
-                "filename": sig.original_filename
-            }
-            for sig in signatures
-        ]
-    }
+        raise HTTPException(status_code=500, detail=f"Błąd weryfikacji: {str(e)}")
