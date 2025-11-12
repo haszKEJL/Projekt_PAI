@@ -68,6 +68,7 @@ const PdfUploader: React.FC = () => {
     try {
       const keySize = keys.keySize || 2048;
 
+      // 1. Przygotuj dokument do podpisu
       const formData = new FormData();
       formData.append('file', file);
       formData.append('metadata', JSON.stringify({
@@ -78,6 +79,7 @@ const PdfUploader: React.FC = () => {
 
       const prepareResponse = await apiService.prepareSignatureWithMetadata(formData);
 
+      // 2. Podpisz hash kluczem prywatnym
       const fileHashBase64 = prepareResponse.file_hash;
       const hashBytes = Uint8Array.from(atob(fileHashBase64), c => c.charCodeAt(0));
 
@@ -91,6 +93,7 @@ const PdfUploader: React.FC = () => {
 
       const signature = await CryptoService.signHash(hashBytes.buffer, privateKeyObj);
 
+      // 3. Osadź podpis w PDF i zapisz w bazie
       const embedData = new FormData();
       embedData.append('temp_file_path', prepareResponse.temp_file_path);
       embedData.append('signature', CryptoService.arrayBufferToBase64(signature));
@@ -101,20 +104,15 @@ const PdfUploader: React.FC = () => {
         keySize: keySize,
       }));
 
-      const signedBlob = await apiService.embedSignature(embedData);
+      // POPRAWKA: zmiana z embedSignature na embedSignatureToDb
+      const embedResult = await apiService.embedSignatureToDb(embedData);
 
-      const url = URL.createObjectURL(signedBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.name.replace('.pdf', '_signed.pdf');
-      a.click();
-      URL.revokeObjectURL(url);
-
-      alert('✅ Dokument został pomyślnie podpisany!');
+      alert(`✅ ${embedResult.message || 'Dokument został pomyślnie podpisany!'}`);
       setFile(null);
       setMetadata({ name: '', location: '', reason: '', contact: '' });
     } catch (error: any) {
-      alert(`❌ Błąd: ${error.response?.data?.detail || error.message}`);
+      console.error('Signing error:', error);
+      alert(`❌ Błąd: ${error.message || 'Nieznany błąd'}`);
     } finally {
       setLoading(false);
     }
@@ -131,7 +129,7 @@ const PdfUploader: React.FC = () => {
           <li>Wybierz plik PDF do podpisania</li>
           <li>Wypełnij dane osoby podpisującej</li>
           <li>Kliknij "Podpisz dokument"</li>
-          <li>Pobierz podpisany plik PDF</li>
+          <li>Pobierz podpisany plik w panelu administratora</li>
         </ul>
       </div>
 
