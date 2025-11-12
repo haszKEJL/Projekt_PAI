@@ -49,53 +49,59 @@ const PdfUploader: React.FC = () => {
   };
 
   const handleSign = async () => {
+    console.log('🚀 === FUNKCJA handleSign WYWOŁANA ===');
+    console.log('File:', file);
+    console.log('Metadata:', metadata);
+    
     if (!file) {
+      console.log('❌ Brak pliku');
       alert('❌ Wybierz plik PDF!');
       return;
     }
 
     if (!metadata.name.trim()) {
+      console.log('❌ Brak imienia');
       alert('❌ Podaj swoje imię i nazwisko!');
       return;
     }
 
+    console.log('✅ Walidacja przeszła, zaczynam podpisywanie...');
     setLoading(true);
     
-    // DEBUG: Sprawdź localStorage przed rozpoczęciem
-    const storageTest = localStorage.getItem('pdf-signature-keys');
-    alert(`🔍 DEBUG START\nKlucze w localStorage: ${storageTest ? 'TAK' : 'NIE'}`);
-    
     try {
-      // 1. SPRAWDŹ CZY KLUCZE ISTNIEJĄ, JEŚLI NIE - WYGENERUJ
+      // ===== AUTO-GENEROWANIE KLUCZY =====
+      console.log('🔑 Sprawdzam klucze w localStorage...');
       let keys = CryptoService.loadKeys();
+      console.log('Klucze przed generowaniem:', keys);
       
       if (!keys) {
-        alert('🔑 Generuję nowe klucze RSA-PSS 2048 bit...');
+        console.log('🔑 Brak kluczy - generuję automatycznie...');
         
         const keyPair = await CryptoService.generateKeyPair(keySize);
+        console.log('✅ Para kluczy wygenerowana');
+        
         const exportedPublic = await CryptoService.exportKey(keyPair.publicKey);
         const exportedPrivate = await CryptoService.exportKey(keyPair.privateKey);
+        console.log('✅ Klucze wyeksportowane');
         
         CryptoService.saveKeys(
           { publicKey: exportedPublic, privateKey: exportedPrivate },
           keySize
         );
-        
-        // Sprawdź czy zapisało się
-        const checkAfterSave = localStorage.getItem('pdf-signature-keys');
-        alert(`✅ Klucze wygenerowane!\nZapisane: ${checkAfterSave ? 'TAK' : 'NIE (BŁĄD!)'}`);
+        console.log('✅ Klucze zapisane w localStorage');
         
         keys = CryptoService.loadKeys();
+        console.log('Klucze po zapisie:', keys);
         
         if (!keys) {
-          throw new Error('❌ Błąd zapisywania kluczy do localStorage!\n\nCzy localStorage jest włączony w przeglądarce?');
+          throw new Error('Błąd zapisywania kluczy do localStorage');
         }
       } else {
-        alert('✅ Użyto istniejących kluczy z localStorage');
+        console.log('✅ Użyto istniejących kluczy z localStorage');
       }
 
       // 2. Przygotuj dokument do podpisu
-      alert('📤 Wysyłam PDF do backendu...');
+      console.log('📤 Wysyłam PDF do backendu...');
       const formData = new FormData();
       formData.append('file', file);
       formData.append('metadata', JSON.stringify({
@@ -105,9 +111,10 @@ const PdfUploader: React.FC = () => {
       }));
 
       const prepareResponse = await apiService.prepareSignatureWithMetadata(formData);
+      console.log('📥 Odpowiedź backendu:', prepareResponse);
 
       // 3. Podpisz hash kluczem prywatnym
-      alert('🔐 Podpisuję hash kluczem prywatnym...');
+      console.log('🔐 Podpisuję hash...');
       const fileHashBase64 = prepareResponse.file_hash;
       const hashBytes = Uint8Array.from(atob(fileHashBase64), c => c.charCodeAt(0));
 
@@ -118,11 +125,13 @@ const PdfUploader: React.FC = () => {
         false,
         ['sign']
       );
+      console.log('✅ Klucz prywatny zaimportowany');
 
       const signature = await CryptoService.signHash(hashBytes.buffer, privateKeyObj);
+      console.log('✅ Hash podpisany');
 
       // 4. Osadź podpis w PDF i zapisz w bazie
-      alert('💾 Zapisuję podpisany PDF w bazie danych...');
+      console.log('💾 Zapisuję podpisany PDF...');
       const embedData = new FormData();
       embedData.append('temp_file_path', prepareResponse.temp_file_path);
       embedData.append('signature', CryptoService.arrayBufferToBase64(signature));
@@ -134,19 +143,17 @@ const PdfUploader: React.FC = () => {
       }));
 
       const embedResult = await apiService.embedSignatureToDb(embedData);
+      console.log('✅ Dokument podpisany!', embedResult);
 
-      alert(`✅ SUKCES!\n\n${embedResult.message || 'Dokument został pomyślnie podpisany!'}\n\nKlucze zapisane w localStorage przeglądarki.`);
+      alert(`✅ ${embedResult.message || 'Dokument został pomyślnie podpisany!'}\n\nKlucze zapisane w localStorage przeglądarki.`);
       
       setFile(null);
       setMetadata({ name: '', location: '', reason: '', contact: '' });
     } catch (error: any) {
-      alert(`❌ BŁĄD PODPISYWANIA:\n\n${error.message || 'Nieznany błąd'}\n\n${error.stack || ''}`);
+      console.error('❌ Błąd podpisywania:', error);
+      alert(`❌ Błąd: ${error.message || 'Nieznany błąd'}`);
     } finally {
       setLoading(false);
-      
-      // DEBUG: Sprawdź localStorage po zakończeniu
-      const finalCheck = localStorage.getItem('pdf-signature-keys');
-      alert(`🔍 DEBUG END\nKlucze w localStorage: ${finalCheck ? 'TAK ✅' : 'NIE ❌'}`);
     }
   };
 
@@ -240,7 +247,10 @@ const PdfUploader: React.FC = () => {
       </div>
 
       <button
-        onClick={handleSign}
+        onClick={() => {
+          console.log('🔘 Przycisk "Podpisz dokument" kliknięty!');
+          handleSign();
+        }}
         disabled={loading || !file}
         className="btn btn--success btn--large"
       >
