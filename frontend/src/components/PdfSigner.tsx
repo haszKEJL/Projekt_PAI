@@ -12,8 +12,16 @@ const PdfSigner: React.FC = () => {
   });
   const [keySize, setKeySize] = useState<number>(2048);
   const [loading, setLoading] = useState(false);
+  const [generatingKeys, setGeneratingKeys] = useState(false);
   const [message, setMessage] = useState('');
   const [dragActive, setDragActive] = useState(false);
+  const [hasKeys, setHasKeys] = useState(false);
+
+  // Sprawdź czy klucze istnieją przy starcie
+  React.useEffect(() => {
+    const keys = CryptoService.loadKeys();
+    setHasKeys(!!keys);
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -62,7 +70,35 @@ const PdfSigner: React.FC = () => {
     window.URL.revokeObjectURL(url);
   };
 
-  const handleSignAndGenerate = async () => {
+  // === GENEROWANIE KLUCZY (ZAWSZE NADPISUJE STARE) ===
+  const handleGenerateKeys = async () => {
+    setGeneratingKeys(true);
+    setMessage('');
+
+    try {
+      setMessage(`🔑 Generowanie kluczy RSA-PSS ${keySize}-bit...`);
+      
+      const keyPair = await CryptoService.generateKeyPair(keySize);
+      const publicKeyJwk = await CryptoService.exportKey(keyPair.publicKey);
+      const privateKeyJwk = await CryptoService.exportKey(keyPair.privateKey);
+      
+      CryptoService.saveKeys(
+        { publicKey: publicKeyJwk, privateKey: privateKeyJwk },
+        keySize
+      );
+
+      setHasKeys(true);
+      setMessage(`✅ Klucze ${keySize}-bit wygenerowane i zapisane w localStorage!`);
+    } catch (error: any) {
+      console.error('❌ Błąd generowania kluczy:', error);
+      setMessage(`❌ Błąd: ${error.message}`);
+    } finally {
+      setGeneratingKeys(false);
+    }
+  };
+
+  // === PODPISYWANIE ===
+  const handleSign = async () => {
     if (!file) {
       alert('❌ Wybierz plik PDF');
       return;
@@ -73,90 +109,62 @@ const PdfSigner: React.FC = () => {
       return;
     }
 
+    const keys = CryptoService.loadKeys();
+    if (!keys) {
+      alert('❌ Najpierw wygeneruj klucze!');
+      return;
+    }
+
     setLoading(true);
     setMessage('');
 
     try {
-      // ===== SPRAWDŹ CZY KLUCZE JUŻ ISTNIEJĄ W LOCALSTORAGE =====
-      console.log('🔑 Sprawdzam klucze w localStorage...');
-      let existingKeys = CryptoService.loadKeys();
-      let publicKeyJwk, privateKeyJwk;
-
-      if (existingKeys) {
-        console.log('✅ Użyto istniejących kluczy z localStorage');
-        setMessage('🔑 Użyto istniejących kluczy z localStorage');
-        publicKeyJwk = existingKeys.publicKey;
-        privateKeyJwk = existingKeys.privateKey;
-      } else {
-        // 1. GENERUJ NOWE KLUCZE
-        console.log('🔑 Brak kluczy - generuję automatycznie...');
-        setMessage('🔑 Generowanie kluczy RSA-PSS...');
-        const keyPair = await CryptoService.generateKeyPair(keySize);
-        publicKeyJwk = await CryptoService.exportKey(keyPair.publicKey);
-        privateKeyJwk = await CryptoService.exportKey(keyPair.privateKey);
-        
-        // ZAPISZ KLUCZE W LOCALSTORAGE
-        CryptoService.saveKeys(
-          { publicKey: publicKeyJwk, privateKey: privateKeyJwk },
-          keySize
-        );
-        console.log('✅ Nowe klucze wygenerowane i zapisane w localStorage');
-        setMessage('✅ Nowe klucze wygenerowane i zapisane');
-      }
-
-      // 2. PRZYGOTUJ FORMULARZ
       const formData = new FormData();
       formData.append('file', file);
       formData.append('metadata', JSON.stringify({
         ...metadata,
         filename: file.name,
-        keySize: keySize,
+        keySize: keys.keySize,
       }));
 
-      // 3. WYŚLIJ DO BACKENDU - DOSTANIESZ HASH
       setMessage('📄 Przygotowywanie dokumentu...');
       const prepareResponse = await apiService.prepareSignatureWithMetadata(formData);
       const fileHashBase64 = prepareResponse.file_hash;
       const tempFilePath = prepareResponse.temp_file_path;
 
-      // 4. KONWERTUJ BASE64 → ARRAYBUFFER
       const hashBytes = Uint8Array.from(atob(fileHashBase64), c => c.charCodeAt(0));
 
-      // 5. ZAŁADUJ KLUCZ PRYWATNY
       setMessage('🔐 Podpisywanie dokumentu...');
       const privateKeyObj = await window.crypto.subtle.importKey(
         'jwk',
-        privateKeyJwk,
+        keys.privateKey,
         { name: 'RSA-PSS', hash: 'SHA-256' },
         false,
         ['sign']
       );
 
-      // 6. PODPISZ HASH
       const signature = await CryptoService.signHash(hashBytes.buffer, privateKeyObj);
       const signatureBase64 = btoa(String.fromCharCode(...new Uint8Array(signature)));
 
-      // 7. WYŚLIJ PODPIS DO BACKENDU
-      setMessage('💾 Zapisywanie podpisu w systemie...');
+      setMessage('💾 Zapisywanie podpisu...');
       const embedFormData = new FormData();
       embedFormData.append('temp_file_path', tempFilePath);
       embedFormData.append('signature', signatureBase64);
-      embedFormData.append('public_key', JSON.stringify(publicKeyJwk));
+      embedFormData.append('public_key', JSON.stringify(keys.publicKey));
       embedFormData.append('metadata', JSON.stringify({
         ...metadata,
         filename: file.name,
-        keySize: keySize,
+        keySize: keys.keySize,
       }));
 
       const embedResponse = await apiService.embedSignatureToDb(embedFormData);
 
-      // 8. POBIERZ KLUCZ PUBLICZNY
       setMessage('⬇️ Pobieranie klucza publicznego...');
       const publicKeyData = JSON.stringify(
         {
           version: '1.0',
-          publicKey: publicKeyJwk,
-          keySize: keySize,
+          publicKey: keys.publicKey,
+          keySize: keys.keySize,
           createdAt: new Date().toISOString(),
           description: 'Klucz publiczny do weryfikacji podpisu',
           filename: file.name,
@@ -166,8 +174,7 @@ const PdfSigner: React.FC = () => {
       );
       downloadFile(publicKeyData, `public_key_${file.name.replace('.pdf', '')}.json`);
 
-      // 9. SUKCES!
-      setMessage(`✅ Dokument podpisany! Klucz publiczny pobrany. Podpisany PDF zapisany w systemie jako: ${embedResponse.filename}\n\nKlucze zapisane w localStorage przeglądarki.`);
+      setMessage(`✅ Dokument podpisany! Klucz publiczny pobrany. Podpisany PDF zapisany jako: ${embedResponse.filename}`);
       setFile(null);
       setMetadata({ name: '', location: '', reason: '', contact: '' });
     } catch (error: any) {
@@ -180,7 +187,23 @@ const PdfSigner: React.FC = () => {
 
   return (
     <div style={{ padding: '20px' }}>
-      {/* Drag & Drop Area */}
+      {/* STATUS */}
+      <div style={{ 
+        padding: '15px', 
+        marginBottom: '20px', 
+        background: hasKeys ? '#d4edda' : '#fff3cd',
+        border: `2px solid ${hasKeys ? '#c3e6cb' : '#ffeaa7'}`,
+        borderRadius: '8px'
+      }}>
+        <strong>{hasKeys ? '🔑 Klucze gotowe' : '⚠️ Brak kluczy'}</strong>
+        <p style={{ margin: '5px 0 0 0', fontSize: '14px', color: '#666' }}>
+          {hasKeys 
+            ? 'Możesz podpisywać dokumenty lub wygenerować nowe klucze.' 
+            : 'Wybierz rozmiar klucza i kliknij "Wygeneruj klucze".'}
+        </p>
+      </div>
+
+      {/* DRAG & DROP */}
       <div
         onClick={() => document.getElementById('fileInput')?.click()}
         onDragEnter={handleDrag}
@@ -205,12 +228,12 @@ const PdfSigner: React.FC = () => {
           style={{ display: 'none' }}
         />
         <p style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>
-          {file ? `✅ ${file.name}` : 'Przeciągnij plik PDF lub kliknij aby wybrać'}
+          {file ? `✅ ${file.name}` : '📄 Przeciągnij plik PDF lub kliknij'}
         </p>
         <p style={{ color: '#999', fontSize: '14px' }}>Obsługiwane formaty: PDF</p>
       </div>
 
-      {/* Metadane */}
+      {/* METADANE */}
       <div style={{ marginBottom: '20px' }}>
         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
           Imię i Nazwisko *
@@ -220,12 +243,7 @@ const PdfSigner: React.FC = () => {
           value={metadata.name}
           onChange={(e) => setMetadata({ ...metadata, name: e.target.value })}
           placeholder="Jan Kowalski"
-          style={{
-            width: '100%',
-            padding: '10px',
-            border: '1px solid #ddd',
-            borderRadius: '5px',
-          }}
+          style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
         />
       </div>
 
@@ -238,12 +256,7 @@ const PdfSigner: React.FC = () => {
           value={metadata.location}
           onChange={(e) => setMetadata({ ...metadata, location: e.target.value })}
           placeholder="Warszawa, Polska"
-          style={{
-            width: '100%',
-            padding: '10px',
-            border: '1px solid #ddd',
-            borderRadius: '5px',
-          }}
+          style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
         />
       </div>
 
@@ -256,12 +269,7 @@ const PdfSigner: React.FC = () => {
           value={metadata.reason}
           onChange={(e) => setMetadata({ ...metadata, reason: e.target.value })}
           placeholder="Akceptacja dokumentu"
-          style={{
-            width: '100%',
-            padding: '10px',
-            border: '1px solid #ddd',
-            borderRadius: '5px',
-          }}
+          style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
         />
       </div>
 
@@ -274,16 +282,11 @@ const PdfSigner: React.FC = () => {
           value={metadata.contact}
           onChange={(e) => setMetadata({ ...metadata, contact: e.target.value })}
           placeholder="email@example.com"
-          style={{
-            width: '100%',
-            padding: '10px',
-            border: '1px solid #ddd',
-            borderRadius: '5px',
-          }}
+          style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
         />
       </div>
 
-      {/* Rozmiar klucza */}
+      {/* ROZMIAR KLUCZA */}
       <div style={{ marginBottom: '20px' }}>
         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
           Rozmiar klucza RSA
@@ -291,12 +294,7 @@ const PdfSigner: React.FC = () => {
         <select
           value={keySize}
           onChange={(e) => setKeySize(Number(e.target.value))}
-          style={{
-            width: '100%',
-            padding: '10px',
-            border: '1px solid #ddd',
-            borderRadius: '5px',
-          }}
+          style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
         >
           <option value={2048}>2048 bitów (standardowy)</option>
           <option value={3072}>3072 bitów (wysoki)</option>
@@ -304,30 +302,49 @@ const PdfSigner: React.FC = () => {
         </select>
       </div>
 
-      {/* Przycisk podpisz */}
-      <button
-        onClick={handleSignAndGenerate}
-        disabled={loading || !file}
-        style={{
-          width: '100%',
-          padding: '15px',
-          background: loading ? '#ccc' : '#667eea',
-          color: 'white',
-          border: 'none',
-          borderRadius: '5px',
-          fontSize: '16px',
-          fontWeight: 'bold',
-          cursor: loading ? 'not-allowed' : 'pointer',
-        }}
-      >
-        {loading ? '⏳ Podpisywanie...' : '✍️ Podpisz dokument (pobierze się klucz publiczny)'}
-      </button>
+      {/* PRZYCISKI */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+        <button
+          onClick={handleGenerateKeys}
+          disabled={generatingKeys}
+          style={{
+            flex: 1,
+            padding: '15px',
+            background: generatingKeys ? '#ccc' : '#ffc107',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            cursor: generatingKeys ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {generatingKeys ? '⏳ Generuję...' : '🔑 Wygeneruj klucze'}
+        </button>
 
-      {/* Status */}
+        <button
+          onClick={handleSign}
+          disabled={loading || !file || !hasKeys}
+          style={{
+            flex: 2,
+            padding: '15px',
+            background: !hasKeys ? '#ccc' : loading ? '#ccc' : '#667eea',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            cursor: loading || !file || !hasKeys ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {loading ? '⏳ Podpisywanie...' : '✍️ Podpisz dokument'}
+        </button>
+      </div>
+
+      {/* KOMUNIKAT */}
       {message && (
         <div
           style={{
-            marginTop: '20px',
             padding: '15px',
             background: message.includes('✅') ? '#d4edda' : message.includes('❌') ? '#f8d7da' : '#d1ecf1',
             border: `1px solid ${message.includes('✅') ? '#c3e6cb' : message.includes('❌') ? '#f5c6cb' : '#bee5eb'}`,
