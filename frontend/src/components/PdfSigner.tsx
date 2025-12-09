@@ -23,6 +23,18 @@ const PdfSigner: React.FC = () => {
     setHasKeys(!!keys);
   }, []);
 
+  const downloadFile = (content: string, filename: string) => {
+    const blob = new Blob([content], { type: 'application/json' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile && selectedFile.type === 'application/pdf') {
@@ -58,18 +70,6 @@ const PdfSigner: React.FC = () => {
     }
   };
 
-  const downloadFile = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: 'application/json' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-  };
-
   // === GENEROWANIE KLUCZY (ZAWSZE NADPISUJE STARE) ===
   const handleGenerateKeys = async () => {
     setGeneratingKeys(true);
@@ -88,12 +88,126 @@ const PdfSigner: React.FC = () => {
       );
 
       setHasKeys(true);
-      setMessage(`✅ Klucze ${keySize}-bit wygenerowane i zapisane w localStorage!`);
+      setMessage(`✅ Klucze ${keySize}-bit wygenerowane i zapisane w sessionStorage (do zamknięcia przeglądarki)!`);
     } catch (error: any) {
       console.error('❌ Błąd generowania kluczy:', error);
       setMessage(`❌ Błąd: ${error.message}`);
     } finally {
       setGeneratingKeys(false);
+    }
+  };
+
+  // === POBIERANIE KLUCZY - Z OPCJĄ TYLKO PRYWATNY ===
+  const handleDownloadKeys = () => {
+    const keys = CryptoService.loadKeys();
+    if (!keys) {
+      alert('❌ Brak kluczy do pobrania. Najpierw wygeneruj klucze.');
+      return;
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    // Pobierz klucz publiczny
+    const publicKeyData = JSON.stringify(
+      {
+        version: '1.0',
+        publicKey: keys.publicKey,
+        keySize: keys.keySize,
+        createdAt: keys.createdAt,
+        description: 'Klucz publiczny do weryfikacji podpisu',
+      },
+      null,
+      2
+    );
+    downloadFile(publicKeyData, `public_key_${timestamp}.json`);
+
+    // ZMIANA - Opcja 1: Pełna para kluczy (bezpieczniejsze)
+    const keyPairData = JSON.stringify(
+      {
+        version: '1.0',
+        publicKey: keys.publicKey,
+        privateKey: keys.privateKey,
+        keySize: keys.keySize,
+        createdAt: keys.createdAt,
+        description: 'Para kluczy - klucz prywatny + publiczny',
+        warning: 'NIE UDOSTĘPNIAJ TEGO PLIKU NIKOMU! Zawiera klucz prywatny.',
+      },
+      null,
+      2
+    );
+    downloadFile(keyPairData, `keypair_${timestamp}.json`);
+
+    // NOWE - Opcja 2: Sam klucz prywatny (wystarczy do podpisywania)
+    const privateOnlyData = JSON.stringify(
+      {
+        version: '1.0',
+        privateKey: keys.privateKey,
+        keySize: keys.keySize,
+        createdAt: keys.createdAt,
+        description: 'TYLKO klucz prywatny - klucz publiczny zostanie automatycznie wyodrębniony',
+        warning: 'NIE UDOSTĘPNIAJ TEGO PLIKU NIKOMU!',
+        note: 'Klucz publiczny zostanie wyodrębniony automatycznie przy imporcie',
+      },
+      null,
+      2
+    );
+    downloadFile(privateOnlyData, `private_key_only_${timestamp}.json`);
+
+    setMessage('✅ Klucze pobrane: public_key.json, keypair.json i private_key_only.json');
+  };
+
+  // === NOWE - IMPORT KLUCZA PRYWATNEGO - ULEPSZONE ===
+  const handleImportPrivateKey = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const fileText = await file.text();
+      const keyData = JSON.parse(fileText);
+
+      // Walidacja struktury
+      if (!keyData.privateKey) {
+        throw new Error('Nieprawidłowy format pliku - brak klucza prywatnego');
+      }
+
+      // Sprawdź czy to prawidłowy klucz JWK
+      if (!keyData.privateKey.kty || !keyData.privateKey.n || !keyData.privateKey.d) {
+        throw new Error('Nieprawidłowa struktura klucza prywatnego');
+      }
+
+      let publicKey: JsonWebKey;
+
+      // NOWE - Jeśli brak klucza publicznego, wyodrębnij go z prywatnego
+      if (!keyData.publicKey) {
+        console.log('⚠️ Brak klucza publicznego - wyodrębniam z prywatnego...');
+        publicKey = CryptoService.extractPublicKeyFromPrivate(keyData.privateKey);
+        console.log('✅ Klucz publiczny wyodrębniony z prywatnego');
+      } else {
+        // Walidacja klucza publicznego
+        if (!keyData.publicKey.kty || !keyData.publicKey.n || !keyData.publicKey.e) {
+          throw new Error('Nieprawidłowa struktura klucza publicznego');
+        }
+        publicKey = keyData.publicKey;
+      }
+
+      // Zapisz parę kluczy
+      CryptoService.saveKeys(
+        {
+          publicKey: publicKey,
+          privateKey: keyData.privateKey,
+        },
+        keyData.keySize || 2048
+      );
+
+      setHasKeys(true);
+      setMessage(`✅ Para kluczy zaimportowana pomyślnie! (${keyData.keySize || 2048}-bit)`);
+      
+      // Wyczyść input
+      e.target.value = '';
+    } catch (error: any) {
+      console.error('❌ Błąd importu klucza:', error);
+      alert(`❌ Błąd importu: ${error.message}`);
+      e.target.value = '';
     }
   };
 
@@ -159,22 +273,7 @@ const PdfSigner: React.FC = () => {
 
       const embedResponse = await apiService.embedSignatureToDb(embedFormData);
 
-      setMessage('⬇️ Pobieranie klucza publicznego...');
-      const publicKeyData = JSON.stringify(
-        {
-          version: '1.0',
-          publicKey: keys.publicKey,
-          keySize: keys.keySize,
-          createdAt: new Date().toISOString(),
-          description: 'Klucz publiczny do weryfikacji podpisu',
-          filename: file.name,
-        },
-        null,
-        2
-      );
-      downloadFile(publicKeyData, `public_key_${file.name.replace('.pdf', '')}.json`);
-
-      setMessage(`✅ Dokument podpisany! Klucz publiczny pobrany. Podpisany PDF zapisany jako: ${embedResponse.filename}`);
+      setMessage(`✅ Dokument podpisany! Podpisany PDF zapisany jako: ${embedResponse.filename}`);
       setFile(null);
       setMetadata({ name: '', location: '', reason: '', contact: '' });
     } catch (error: any) {
@@ -198,8 +297,8 @@ const PdfSigner: React.FC = () => {
         <strong>{hasKeys ? '🔑 Klucze gotowe' : '⚠️ Brak kluczy'}</strong>
         <p style={{ margin: '5px 0 0 0', fontSize: '14px', color: '#666' }}>
           {hasKeys 
-            ? 'Możesz podpisywać dokumenty lub wygenerować nowe klucze.' 
-            : 'Wybierz rozmiar klucza i kliknij "Wygeneruj klucze".'}
+            ? 'Możesz podpisywać dokumenty, pobierać lub wygenerować nowe klucze.' 
+            : 'Wybierz rozmiar klucza i kliknij "Wygeneruj klucze" lub zaimportuj klucz prywatny.'}
         </p>
       </div>
 
@@ -302,13 +401,14 @@ const PdfSigner: React.FC = () => {
         </select>
       </div>
 
-      {/* PRZYCISKI */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+      {/* PRZYCISKI ZARZĄDZANIA KLUCZAMI */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
         <button
           onClick={handleGenerateKeys}
           disabled={generatingKeys}
           style={{
             flex: 1,
+            minWidth: '150px',
             padding: '15px',
             background: generatingKeys ? '#ccc' : '#ffc107',
             color: 'white',
@@ -323,23 +423,71 @@ const PdfSigner: React.FC = () => {
         </button>
 
         <button
-          onClick={handleSign}
-          disabled={loading || !file || !hasKeys}
+          onClick={handleDownloadKeys}
+          disabled={!hasKeys}
           style={{
-            flex: 2,
+            flex: 1,
+            minWidth: '150px',
             padding: '15px',
-            background: !hasKeys ? '#ccc' : loading ? '#ccc' : '#667eea',
+            background: !hasKeys ? '#ccc' : '#2196F3',
             color: 'white',
             border: 'none',
             borderRadius: '5px',
             fontSize: '16px',
             fontWeight: 'bold',
-            cursor: loading || !file || !hasKeys ? 'not-allowed' : 'pointer',
+            cursor: !hasKeys ? 'not-allowed' : 'pointer',
           }}
         >
-          {loading ? '⏳ Podpisywanie...' : '✍️ Podpisz dokument'}
+          ⬇️ Pobierz klucze
         </button>
+
+        <label
+          style={{
+            flex: 1,
+            minWidth: '150px',
+            padding: '15px',
+            background: '#9c27b0',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            textAlign: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          📥 Importuj parę kluczy
+          <input
+            type="file"
+            accept=".json"
+            onChange={handleImportPrivateKey}
+            style={{ display: 'none' }}
+          />
+        </label>
       </div>
+
+      {/* PRZYCISK PODPISU */}
+      <button
+        onClick={handleSign}
+        disabled={loading || !file || !hasKeys}
+        style={{
+          width: '100%',
+          padding: '15px',
+          background: !hasKeys ? '#ccc' : loading ? '#ccc' : '#667eea',
+          color: 'white',
+          border: 'none',
+          borderRadius: '5px',
+          fontSize: '16px',
+          fontWeight: 'bold',
+          cursor: loading || !file || !hasKeys ? 'not-allowed' : 'pointer',
+          marginBottom: '20px',
+        }}
+      >
+        {loading ? '⏳ Podpisywanie...' : '✍️ Podpisz dokument'}
+      </button>
 
       {/* KOMUNIKAT */}
       {message && (
@@ -355,6 +503,26 @@ const PdfSigner: React.FC = () => {
           {message}
         </div>
       )}
+
+      {/* OSTRZEŻENIE BEZPIECZEŃSTWA */}
+      <div style={{
+        marginTop: '20px',
+        padding: '15px',
+        background: '#fff3cd',
+        border: '2px solid #ffc107',
+        borderRadius: '8px',
+      }}>
+        <strong>⚠️ Ważne informacje o kluczach:</strong>
+        <ul style={{ marginTop: '10px', paddingLeft: '20px' }}>
+          <li><strong>public_key_*.json</strong> - Tylko klucz publiczny. Możesz udostępnić innym do weryfikacji.</li>
+          <li><strong>keypair_*.json</strong> - Para kluczy (prywatny + publiczny). NIE UDOSTĘPNIAJ!</li>
+          <li><strong>private_key_only_*.json</strong> - Sam klucz prywatny (wystarczy do podpisywania). NIE UDOSTĘPNIAJ!</li>
+          <li><strong>Klucz prywatny</strong> - służy do podpisywania dokumentów</li>
+          <li><strong>Klucz publiczny</strong> - jest automatycznie dołączany do podpisu (wyodrębniany z prywatnego)</li>
+          <li>Do importu możesz użyć pliku zawierającego sam klucz prywatny - klucz publiczny zostanie wyodrębniony</li>
+          <li>Przechowuj klucz prywatny w bezpiecznym miejscu (np. zaszyfrowany dysk, KeePass)</li>
+        </ul>
+      </div>
     </div>
   );
 };

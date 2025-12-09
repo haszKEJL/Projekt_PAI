@@ -65,7 +65,7 @@ class CryptoService {
   }
 
   /** 
-   * Zapisuje parę kluczy w localStorage
+   * Zapisuje parę kluczy w sessionStorage (kasuje się po zamknięciu przeglądarki)
    * @param keySize - Rozmiar klucza w bitach
    */
   saveKeys(
@@ -79,15 +79,15 @@ class CryptoService {
       createdAt: new Date().toISOString(),
     };
     
-    localStorage.setItem('pdf-signature-keys', JSON.stringify(keysData));
-    console.log('✅ Klucze zapisane w localStorage:', keysData);
+    sessionStorage.setItem('pdf-signature-keys', JSON.stringify(keysData));
+    console.log('✅ Klucze zapisane w sessionStorage (zostają do zamknięcia przeglądarki):', keysData);
   }
 
-  /** Odczytuje parę kluczy z localStorage (lub null, jeśli brak) */
+  /** Odczytuje parę kluczy z sessionStorage (lub null, jeśli brak) */
   loadKeys(): KeyPairData | null {
-    const data = localStorage.getItem('pdf-signature-keys');
+    const data = sessionStorage.getItem('pdf-signature-keys');
     if (!data) {
-      console.log('❌ Brak kluczy w localStorage');
+      console.log('❌ Brak kluczy w sessionStorage');
       return null;
     }
     
@@ -98,14 +98,33 @@ class CryptoService {
       parsed.keySize = 2048;
     }
     
-    console.log('✅ Klucze odczytane z localStorage');
+    console.log('✅ Klucze odczytane z sessionStorage');
     return parsed as KeyPairData;
   }
 
-  /** Usuwa klucze z localStorage */
+  /** Usuwa klucze z sessionStorage */
   deleteKeys(): void {
-    localStorage.removeItem('pdf-signature-keys');
-    console.log('🗑️ Klucze usunięte z localStorage');
+    sessionStorage.removeItem('pdf-signature-keys');
+    console.log('🗑️ Klucze usunięte z sessionStorage');
+  }
+
+  /**
+   * Wyodrębnia klucz publiczny z klucza prywatnego JWK
+   * Klucz prywatny RSA zawiera wszystkie komponenty klucza publicznego (n, e)
+   */
+  extractPublicKeyFromPrivate(privateKeyJwk: JsonWebKey): JsonWebKey {
+    if (!privateKeyJwk.n || !privateKeyJwk.e) {
+      throw new Error('Nieprawidłowy klucz prywatny - brak komponentów n lub e');
+    }
+
+    return {
+      kty: 'RSA',
+      n: privateKeyJwk.n,
+      e: privateKeyJwk.e,
+      alg: privateKeyJwk.alg || 'PS256',
+      ext: true,
+      key_ops: ['verify']
+    };
   }
 }
 

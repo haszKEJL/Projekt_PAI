@@ -236,6 +236,65 @@ async def download_signed_pdf(
     )
 
 
+@router.get("/download-public-key/{signature_id}")
+async def download_public_key(
+    signature_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Pobiera klucz publiczny dla danego podpisu w formacie JSON"""
+    
+    if current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Tylko administratorzy mogą pobierać klucze")
+    
+    signature = db.query(Signature).filter(Signature.id == signature_id).first()
+    
+    if not signature:
+        raise HTTPException(404, "Podpis nie znaleziony")
+    
+    if not signature.public_key_jwk:
+        raise HTTPException(404, "Klucz publiczny nie jest dostępny dla tego podpisu")
+    
+    try:
+        # Parsuj klucz publiczny z bazy
+        public_key_data = json.loads(signature.public_key_jwk)
+        
+        # Przygotuj pełny obiekt do pobrania
+        key_file_content = {
+            "version": "1.0",
+            "publicKey": public_key_data,
+            "document_info": {
+                "filename": signature.original_filename,
+                "signer": signature.signer_name,
+                "signed_at": signature.created_at.isoformat(),
+                "location": signature.signer_location,
+                "reason": signature.signer_reason
+            },
+            "description": "Klucz publiczny do weryfikacji podpisu cyfrowego"
+        }
+        
+        # Utwórz tymczasowy plik JSON
+        temp_dir = tempfile.mkdtemp()
+        safe_filename = signature.original_filename.replace('.pdf', '') if signature.original_filename else 'document'
+        json_filename = f"public_key_{safe_filename}.json"
+        json_path = os.path.join(temp_dir, json_filename)
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(key_file_content, f, indent=2, ensure_ascii=False)
+        
+        return FileResponse(
+            json_path,
+            filename=json_filename,
+            media_type='application/json',
+            background=None  # Nie usuwaj pliku automatycznie
+        )
+        
+    except json.JSONDecodeError:
+        raise HTTPException(500, "Błąd parsowania klucza publicznego")
+    except Exception as e:
+        raise HTTPException(500, f"Błąd pobierania klucza: {str(e)}")
+
+
 @router.post("/verify-signature")
 async def verify_signature(
     file: UploadFile = File(...),

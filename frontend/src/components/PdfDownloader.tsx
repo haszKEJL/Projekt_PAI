@@ -70,6 +70,23 @@ const PdfDownloader: React.FC = () => {
     }
   };
 
+  const downloadPublicKey = async (id: string, filename: string) => {
+    try {
+      const blob = await apiService.downloadPublicKey(id);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const keyFilename = filename.replace('.pdf', '_public_key.json');
+      a.download = keyFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(`❌ Błąd pobierania klucza: ${err.response?.data?.detail || err.message}`);
+    }
+  };
+
   const deletePdf = async (id: string, filename: string) => {
     if (!confirm(`Czy na pewno usunąć dokument: ${filename}?`)) {
       return;
@@ -168,7 +185,7 @@ const PdfDownloader: React.FC = () => {
             <th style={{ padding: '15px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Użytkownik</th>
             <th style={{ padding: '15px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Podpisał</th>
             <th style={{ padding: '15px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Data</th>
-            <th style={{ padding: '15px', textAlign: 'center', borderBottom: '2px solid #ddd' }}>Akcje</th>
+            <th style={{ padding: '15px', textAlign: 'center', borderBottom: '2px solid #ddd', width: '220px' }}>Akcje</th>
           </tr>
         </thead>
         <tbody>
@@ -187,33 +204,56 @@ const PdfDownloader: React.FC = () => {
                 {new Date(pdf.signed_at).toLocaleString('pl-PL')}
               </td>
               <td style={{ padding: '15px', textAlign: 'center' }}>
-                <button
-                  onClick={() => downloadPdf(pdf.id, pdf.filename)}
-                  style={{
-                    padding: '8px 16px',
-                    background: '#4caf50',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    marginRight: '5px'
-                  }}
-                >
-                  ⬇️ Pobierz
-                </button>
-                <button
-                  onClick={() => deletePdf(pdf.id, pdf.filename)}
-                  style={{
-                    padding: '8px 16px',
-                    background: '#f44336',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '5px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  🗑️ Usuń
-                </button>
+                <div style={{ display: 'flex', gap: '5px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => downloadPdf(pdf.id, pdf.filename)}
+                    style={{
+                      padding: '8px 12px',
+                      background: '#4caf50',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '5px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      whiteSpace: 'nowrap'
+                    }}
+                    title="Pobierz podpisany PDF"
+                  >
+                    📄 PDF
+                  </button>
+                  <button
+                    onClick={() => downloadPublicKey(pdf.id, pdf.filename)}
+                    style={{
+                      padding: '8px 12px',
+                      background: '#2196F3',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '5px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      whiteSpace: 'nowrap'
+                    }}
+                    title="Pobierz klucz publiczny do weryfikacji"
+                  >
+                    🔑 Klucz
+                  </button>
+                  <button
+                    onClick={() => deletePdf(pdf.id, pdf.filename)}
+                    style={{
+                      padding: '8px 12px',
+                      background: '#f44336',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '5px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      whiteSpace: 'nowrap'
+                    }}
+                    title="Usuń dokument"
+                  >
+                    🗑️ Usuń
+                  </button>
+                </div>
               </td>
             </tr>
           ))}

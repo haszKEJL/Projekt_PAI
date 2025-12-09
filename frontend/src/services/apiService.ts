@@ -74,6 +74,15 @@ const apiService = {
     return response.data;
   },
 
+  // NOWE - Pobierz klucz publiczny dla podpisu
+  downloadPublicKey: async (signatureId: string) => {
+    const response = await axios.get(
+      `${API_BASE_URL}/signature/download-public-key/${signatureId}`,
+      { responseType: 'blob' }
+    );
+    return response.data;
+  },
+
   // Weryfikuje podpis
   verifySignature: async (formData: FormData) => {
     const response = await axios.post(
