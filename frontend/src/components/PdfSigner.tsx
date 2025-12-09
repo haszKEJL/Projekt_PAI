@@ -97,7 +97,7 @@ const PdfSigner: React.FC = () => {
     }
   };
 
-  // === POBIERANIE KLUCZY - Z OPCJĄ TYLKO PRYWATNY ===
+  // === POBIERANIE KLUCZA PRYWATNEGO ===
   const handleDownloadKeys = () => {
     const keys = CryptoService.loadKeys();
     if (!keys) {
@@ -107,56 +107,27 @@ const PdfSigner: React.FC = () => {
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
-    // Pobierz klucz publiczny
-    const publicKeyData = JSON.stringify(
-      {
-        version: '1.0',
-        publicKey: keys.publicKey,
-        keySize: keys.keySize,
-        createdAt: keys.createdAt,
-        description: 'Klucz publiczny do weryfikacji podpisu',
-      },
-      null,
-      2
-    );
-    downloadFile(publicKeyData, `public_key_${timestamp}.json`);
-
-    // ZMIANA - Opcja 1: Pełna para kluczy (bezpieczniejsze)
-    const keyPairData = JSON.stringify(
-      {
-        version: '1.0',
-        publicKey: keys.publicKey,
-        privateKey: keys.privateKey,
-        keySize: keys.keySize,
-        createdAt: keys.createdAt,
-        description: 'Para kluczy - klucz prywatny + publiczny',
-        warning: 'NIE UDOSTĘPNIAJ TEGO PLIKU NIKOMU! Zawiera klucz prywatny.',
-      },
-      null,
-      2
-    );
-    downloadFile(keyPairData, `keypair_${timestamp}.json`);
-
-    // NOWE - Opcja 2: Sam klucz prywatny (wystarczy do podpisywania)
-    const privateOnlyData = JSON.stringify(
+    // Pobierz TYLKO klucz prywatny (zawiera informacje do wyodrębnienia klucza publicznego)
+    const privateKeyData = JSON.stringify(
       {
         version: '1.0',
         privateKey: keys.privateKey,
         keySize: keys.keySize,
         createdAt: keys.createdAt,
-        description: 'TYLKO klucz prywatny - klucz publiczny zostanie automatycznie wyodrębniony',
+        description: 'Klucz prywatny do podpisywania dokumentów',
         warning: 'NIE UDOSTĘPNIAJ TEGO PLIKU NIKOMU!',
-        note: 'Klucz publiczny zostanie wyodrębniony automatycznie przy imporcie',
+        note: 'Klucz publiczny zostanie automatycznie wyodrębniony przy imporcie',
+        info: 'Ten plik zawiera wszystkie informacje potrzebne do podpisywania dokumentów'
       },
       null,
       2
     );
-    downloadFile(privateOnlyData, `private_key_only_${timestamp}.json`);
+    downloadFile(privateKeyData, `private_key_${timestamp}.json`);
 
-    setMessage('✅ Klucze pobrane: public_key.json, keypair.json i private_key_only.json');
+    setMessage('✅ Klucz prywatny pobrany. UWAGA: Przechowuj bezpiecznie!');
   };
 
-  // === NOWE - IMPORT KLUCZA PRYWATNEGO - ULEPSZONE ===
+  // === IMPORT KLUCZA PRYWATNEGO - ULEPSZONE ===
   const handleImportPrivateKey = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -177,18 +148,10 @@ const PdfSigner: React.FC = () => {
 
       let publicKey: JsonWebKey;
 
-      // NOWE - Jeśli brak klucza publicznego, wyodrębnij go z prywatnego
-      if (!keyData.publicKey) {
-        console.log('⚠️ Brak klucza publicznego - wyodrębniam z prywatnego...');
-        publicKey = CryptoService.extractPublicKeyFromPrivate(keyData.privateKey);
-        console.log('✅ Klucz publiczny wyodrębniony z prywatnego');
-      } else {
-        // Walidacja klucza publicznego
-        if (!keyData.publicKey.kty || !keyData.publicKey.n || !keyData.publicKey.e) {
-          throw new Error('Nieprawidłowa struktura klucza publicznego');
-        }
-        publicKey = keyData.publicKey;
-      }
+      // Wyodrębnij klucz publiczny z prywatnego
+      console.log('⚙️ Wyodrębniam klucz publiczny z prywatnego...');
+      publicKey = CryptoService.extractPublicKeyFromPrivate(keyData.privateKey);
+      console.log('✅ Klucz publiczny wyodrębniony pomyślnie');
 
       // Zapisz parę kluczy
       CryptoService.saveKeys(
@@ -200,7 +163,7 @@ const PdfSigner: React.FC = () => {
       );
 
       setHasKeys(true);
-      setMessage(`✅ Para kluczy zaimportowana pomyślnie! (${keyData.keySize || 2048}-bit)`);
+      setMessage(`✅ Klucz prywatny zaimportowany! Klucz publiczny wyodrębniony automatycznie. (${keyData.keySize || 2048}-bit)`);
       
       // Wyczyść input
       e.target.value = '';
@@ -419,7 +382,7 @@ const PdfSigner: React.FC = () => {
             cursor: generatingKeys ? 'not-allowed' : 'pointer',
           }}
         >
-          {generatingKeys ? '⏳ Generuję...' : '🔑 Wygeneruj klucze'}
+          {generatingKeys ? '⏳ Generuję...' : '🔑 Wygeneruj nowe klucze'}
         </button>
 
         <button
@@ -438,7 +401,7 @@ const PdfSigner: React.FC = () => {
             cursor: !hasKeys ? 'not-allowed' : 'pointer',
           }}
         >
-          ⬇️ Pobierz klucze
+          ⬇️ Pobierz klucz prywatny
         </button>
 
         <label
@@ -459,7 +422,7 @@ const PdfSigner: React.FC = () => {
             justifyContent: 'center',
           }}
         >
-          📥 Importuj parę kluczy
+          📥 Importuj klucz prywatny
           <input
             type="file"
             accept=".json"
@@ -512,15 +475,15 @@ const PdfSigner: React.FC = () => {
         border: '2px solid #ffc107',
         borderRadius: '8px',
       }}>
-        <strong>⚠️ Ważne informacje o kluczach:</strong>
+        <strong>⚠️ Ważne informacje o bezpieczeństwie:</strong>
         <ul style={{ marginTop: '10px', paddingLeft: '20px' }}>
-          <li><strong>public_key_*.json</strong> - Tylko klucz publiczny. Możesz udostępnić innym do weryfikacji.</li>
-          <li><strong>keypair_*.json</strong> - Para kluczy (prywatny + publiczny). NIE UDOSTĘPNIAJ!</li>
-          <li><strong>private_key_only_*.json</strong> - Sam klucz prywatny (wystarczy do podpisywania). NIE UDOSTĘPNIAJ!</li>
-          <li><strong>Klucz prywatny</strong> - służy do podpisywania dokumentów</li>
-          <li><strong>Klucz publiczny</strong> - jest automatycznie dołączany do podpisu (wyodrębniany z prywatnego)</li>
-          <li>Do importu możesz użyć pliku zawierającego sam klucz prywatny - klucz publiczny zostanie wyodrębniony</li>
-          <li>Przechowuj klucz prywatny w bezpiecznym miejscu (np. zaszyfrowany dysk, KeePass)</li>
+          <li><strong>Klucz prywatny</strong> - służy do podpisywania dokumentów. NIGDY NIE UDOSTĘPNIAJ!</li>
+          <li><strong>Klucz publiczny</strong> - jest automatycznie dołączany do każdego podpisanego dokumentu</li>
+          <li>Administrator może pobrać klucz publiczny z podpisanego PDF do weryfikacji</li>
+          <li>Import klucza prywatnego automatycznie wyodrębnia z niego klucz publiczny</li>
+          <li>Przechowuj plik <code>private_key_*.json</code> w bezpiecznym miejscu (np. zaszyfrowany dysk, pendrive)</li>
+          <li>Jeśli utracisz klucz prywatny, nie będziesz mógł podpisywać dokumentów tym samym kluczem</li>
+          <li>Klucze są przechowywane w przeglądarce do momentu jej zamknięcia (sessionStorage)</li>
         </ul>
       </div>
     </div>
